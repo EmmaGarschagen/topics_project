@@ -11,8 +11,9 @@
  * W. Bangerth, The deal.II tutorial: Step-77 tutorial program. URL: dealii.org/current/doxygen/deal.II/step_77.html
  */
 
-#include <deal.II/base/function.h>
+
 #include <deal.II/base/parameter_handler.h>
+#include <deal.II/base/function.h>
 #include <deal.II/base/point.h>
 #include <deal.II/base/quadrature_lib.h>
 #include <deal.II/base/symmetric_tensor.h>
@@ -140,6 +141,7 @@ namespace CooksMembrane
             }
             prm.leave_subsection();
         }
+
 
         void Geometry::parse_parameters(dealii::ParameterHandler &prm)
         {
@@ -733,7 +735,9 @@ namespace CooksMembrane
                 nonlinear_solver.solve_with_jacobian = [&](const Vector<double> &rhs,
                                                            Vector<double> &      dst,
                                                            const double tolerance) {
-                    this->solve(rhs, dst, tolerance);
+                    Vector<double> rhs_to_use = rhs;
+//                    rhs_to_use *= 0.5;
+                    this->solve(rhs_to_use, dst, tolerance);
 
                     return 0;
                 };

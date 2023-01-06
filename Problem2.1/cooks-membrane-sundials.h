@@ -1,3 +1,6 @@
+#ifndef TENSILETEST_H
+#define TENSILETEST_H
+
 /* ---------------------------------------------------------------------
  * Problem 1: Finite Deformation Elasticit
  * Emma Garschagen
@@ -53,6 +56,8 @@
 
 #include <deal.II/base/config.h>
 
+#include <deal.II/sundials/kinsol.h>
+
 #if DEAL_II_VERSION_MAJOR >= 9 && defined(DEAL_II_WITH_TRILINOS)
 
 #include <deal.II/differentiation/ad.h>
@@ -68,12 +73,14 @@
 #include <fstream>
 #include <memory>
 
+#include "parameter_config.h"
+#include "time.h"
 
 bool almost_equals(const double &a,
                    const double &b,
-                   const double &tol = 1e-8) {
-    return fabs(a - b) < tol;
-}
+                   const double &tol = 1e-8);// {
+//    return fabs(a - b) < tol;
+//}
 
 namespace Tensile_Test {
     using namespace dealii;
@@ -81,321 +88,14 @@ namespace Tensile_Test {
     using namespace Physics::Elasticity;
     using namespace std;
 
-// @sect3{Run-time parameters}
-
-    namespace Parameters {
-
-// @sect4{Finite Element system}
-
-// Here we specify the polynomial order used to approximate the solution.
-// The quadrature order should be adjusted accordingly.
-        struct FESystem {
-            unsigned int poly_degree;
-            unsigned int quad_order;
-            unsigned int sim_geom;
-
-            static void
-            declare_parameters(ParameterHandler &prm);
-
-            void
-            parse_parameters(ParameterHandler &prm);
-        };
 
 
-        void FESystem::declare_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Finite element system");
-            {
-                prm.declare_entry("Polynomial degree", "2",
-                                  Patterns::Integer(0),
-                                  "Displacement system polynomial order");
-
-                prm.declare_entry("Quadrature order", "3",
-                                  Patterns::Integer(0),
-                                  "Gauss quadrature order");
-
-                prm.declare_entry("Simulation geometry", "1",
-                                  Patterns::Integer(0),
-                                  "Simulation geometry");
-            }
-            prm.leave_subsection();
-        }
-
-        void FESystem::parse_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Finite element system");
-            {
-                poly_degree = prm.get_integer("Polynomial degree");
-                quad_order = prm.get_integer("Quadrature order");
-                sim_geom = prm.get_integer("Simulation geometry");
-            }
-            prm.leave_subsection();
-        }
+inline double degrees_to_radians(const double &degrees) {
+    return degrees * (M_PI / 180.0);
+}
 
 
-// @sect4{Materials}
 
-// The shear modulus $ \mu $ and Poisson ration $ \nu $ for the
-// neo-Hookean material.
-        struct Materials {
-            double nu;
-            double mu;
-
-            static void
-            declare_parameters(ParameterHandler &prm);
-
-            void
-            parse_parameters(ParameterHandler &prm);
-        };
-
-        void Materials::declare_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Material properties");
-            {
-                prm.declare_entry("Poisson's ratio", "0.3",
-                                  Patterns::Double(-1.0, 0.5),
-                                  "Poisson's ratio");
-
-                prm.declare_entry("Shear modulus", "0.450e6",
-                                  Patterns::Double(),
-                                  "Shear modulus");
-            }
-            prm.leave_subsection();
-        }
-
-        void Materials::parse_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Material properties");
-            {
-                nu = prm.get_double("Poisson's ratio");
-                mu = prm.get_double("Shear modulus");
-            }
-            prm.leave_subsection();
-        }
-
-// @sect4{Linear solver}
-
-// Next, we choose both solver and preconditioner settings.  The use of an
-// effective preconditioner is critical to ensure convergence when a large
-// nonlinear motion occurs within a Newton increment.
-        struct LinearSolver {
-            std::string type_lin;
-            double tol_lin;
-            double max_iterations_lin;
-            std::string preconditioner_type;
-            double preconditioner_relaxation;
-
-            static void
-            declare_parameters(ParameterHandler &prm);
-
-            void
-            parse_parameters(ParameterHandler &prm);
-        };
-
-        void LinearSolver::declare_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Linear solver");
-            {
-                prm.declare_entry("Solver type", "CG",
-                                  Patterns::Selection("CG|Direct"),
-                                  "Type of solver used to solve the linear system");
-
-                prm.declare_entry("Residual", "1e-6",
-                                  Patterns::Double(0.0),
-                                  "Linear solver residual (scaled by residual norm)");
-
-                prm.declare_entry("Max iteration multiplier", "1",
-                                  Patterns::Double(0.0),
-                                  "Linear solver iterations (multiples of the system matrix size)");
-
-                prm.declare_entry("Preconditioner type", "ssor",
-                                  Patterns::Selection("jacobi|ssor"),
-                                  "Type of preconditioner");
-
-                prm.declare_entry("Preconditioner relaxation", "0.65",
-                                  Patterns::Double(0.0),
-                                  "Preconditioner relaxation value");
-            }
-            prm.leave_subsection();
-        }
-
-        void LinearSolver::parse_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Linear solver");
-            {
-                type_lin = prm.get("Solver type");
-                tol_lin = prm.get_double("Residual");
-                max_iterations_lin = prm.get_double("Max iteration multiplier");
-                preconditioner_type = prm.get("Preconditioner type");
-                preconditioner_relaxation = prm.get_double("Preconditioner relaxation");
-            }
-            prm.leave_subsection();
-        }
-
-// @sect4{Nonlinear solver}
-
-// A Newton-Raphson scheme is used to solve the nonlinear system of governing
-// equations.  We now define the tolerances and the maximum number of
-// iterations for the Newton-Raphson nonlinear solver.
-        struct NonlinearSolver {
-            unsigned int max_iterations_NR;
-            double tol_f;
-            double tol_u;
-
-            static void
-            declare_parameters(ParameterHandler &prm);
-
-            void
-            parse_parameters(ParameterHandler &prm);
-        };
-
-        void NonlinearSolver::declare_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Nonlinear solver");
-            {
-                prm.declare_entry("Max iterations Newton-Raphson", "10",
-                                  Patterns::Integer(0),
-                                  "Number of Newton-Raphson iterations allowed");
-
-                prm.declare_entry("Tolerance force", "1.0e-9",
-                                  Patterns::Double(0.0),
-                                  "Force residual tolerance");
-
-                prm.declare_entry("Tolerance displacement", "1.0e-6",
-                                  Patterns::Double(0.0),
-                                  "Displacement error tolerance");
-            }
-            prm.leave_subsection();
-        }
-
-        void NonlinearSolver::parse_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Nonlinear solver");
-            {
-                max_iterations_NR = prm.get_integer("Max iterations Newton-Raphson");
-                tol_f = prm.get_double("Tolerance force");
-                tol_u = prm.get_double("Tolerance displacement");
-            }
-            prm.leave_subsection();
-        }
-
-// @sect4{Time}
-
-// Set the timestep size $ \varDelta t $ and the simulation end-time.
-        struct Time {
-            double delta_t;
-            double end_time;
-
-            static void
-            declare_parameters(ParameterHandler &prm);
-
-            void
-            parse_parameters(ParameterHandler &prm);
-        };
-
-        void Time::declare_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Time");
-            {
-                prm.declare_entry("End time", "1",
-                                  Patterns::Double(),
-                                  "End time");
-
-                prm.declare_entry("Time step size", "0.1",
-                                  Patterns::Double(),
-                                  "Time step size");
-            }
-            prm.leave_subsection();
-        }
-
-        void Time::parse_parameters(ParameterHandler &prm) {
-            prm.enter_subsection("Time");
-            {
-                end_time = prm.get_double("End time");
-                delta_t = prm.get_double("Time step size");
-            }
-            prm.leave_subsection();
-        }
-
-// @sect4{All parameters}
-
-// Finally we consolidate all of the above structures into a single container
-// that holds all of our run-time selections.
-        struct AllParameters :
-                public FESystem,
-                public Materials,
-                public LinearSolver,
-                public NonlinearSolver,
-                public Time
-        {
-            AllParameters(const std::string &input_file);
-
-            static void
-            declare_parameters(ParameterHandler &prm);
-
-            void
-            parse_parameters(ParameterHandler &prm);
-        };
-
-        AllParameters::AllParameters(const std::string &input_file) {
-            ParameterHandler prm;
-            declare_parameters(prm);
-            prm.parse_input(input_file);
-            parse_parameters(prm);
-        }
-
-        void AllParameters::declare_parameters(ParameterHandler &prm) {
-            FESystem::declare_parameters(prm);
-            Materials::declare_parameters(prm);
-            LinearSolver::declare_parameters(prm);
-            NonlinearSolver::declare_parameters(prm);
-            Time::declare_parameters(prm);
-        }
-
-        void AllParameters::parse_parameters(ParameterHandler &prm) {
-            FESystem::parse_parameters(prm);
-            Materials::parse_parameters(prm);
-            LinearSolver::parse_parameters(prm);
-            NonlinearSolver::parse_parameters(prm);
-            Time::parse_parameters(prm);
-        }
-    }
-
-
-// @sect3{Time class}
-
-// A simple class to store time data. Assume a constant time step
-// size.
-    class Time {
-    public:
-        Time(const double time_end,
-             const double delta_t)
-                :
-                timestep(0),
-                time_current(0.0),
-                time_end(time_end),
-                delta_t(delta_t) {}
-
-        virtual ~Time() {}
-
-        double current() const {
-            return time_current;
-        }
-
-        double end() const {
-            return time_end;
-        }
-
-        double get_delta_t() const {
-            return delta_t;
-        }
-
-        unsigned int get_timestep() const {
-            return timestep;
-        }
-
-        void increment() {
-            time_current += delta_t;
-            ++timestep;
-        }
-
-    private:
-        unsigned int timestep;
-        double time_current;
-        const double time_end;
-        const double delta_t;
-    };
 
 // @sect3{Compressible neo-Hookean material within a one-field formulation}
 
@@ -746,16 +446,16 @@ namespace Tensile_Test {
 
         // We start the collection of member functions with one that builds the
         // grid:
-        Triangulation<dim>
-        make_dog_bone_geometry(const double &thickness,
-                               const double &gauge_length,
-                               const double &gauge_width,
-                               const double &fillet_radius,
-                               const double &clamp_width,
-                               const double &clamp_length,
-                               const int &n_refinements = 0,
-                               const bool &output_all_triangulations = false,
-                               const double &radius_multiplier = 1.25);
+//        Triangulation<dim>
+//        make_dog_bone_geometry(const double &thickness,
+//                               const double &gauge_length,
+//                               const double &gauge_width,
+//                               const double &fillet_radius,
+//                               const double &clamp_width,
+//                               const double &clamp_length,
+//                               const int &n_refinements = 0,
+//                               const bool &output_all_triangulations = false,
+//                               const double &radius_multiplier = 1.25);
 
         void
         make_grid();
@@ -770,7 +470,7 @@ namespace Tensile_Test {
         // and one that copies the work done on this one cell into the global
         // object that represents it:
         void
-        assemble_system(const BlockVector<double> &solution_delta);
+        assemble_system(const BlockVector<double> &solution_delta, const bool rhs_only);
 
         // We use a separate data structure to perform the assembly. It needs access
         // to some low-level data, so we simply befriend the class instead of
@@ -794,6 +494,20 @@ namespace Tensile_Test {
         // linearized Newton-Raphson step:
         void
         solve_nonlinear_timestep(BlockVector<double> &solution_delta);
+
+        unsigned int
+        solve_nonlinear_timestep_kinsol(BlockVector<double> &solution_delta);
+
+        std::unique_ptr<SparseDirectUMFPACK> jacobian_matrix_factorization;
+
+        void
+        compute_and_factorize_jacobian(const BlockVector<double> &newton_update_in, const double newton_iteration);
+
+        void
+        solve_linear_kinsol(const BlockVector<double> &rhs,
+                            BlockVector<double> &present_solution);
+
+
 
         std::pair<unsigned int, double>
         solve_linear_system(BlockVector<double> &newton_update);
@@ -867,7 +581,6 @@ namespace Tensile_Test {
         AffineConstraints<double> constraints;
         BlockSparsityPattern sparsity_pattern;
         BlockSparseMatrix<double> tangent_matrix;
-        BlockVector<double> green_strain;
         BlockVector<double> system_rhs;
         BlockVector<double> solution_n;
 
@@ -912,6 +625,9 @@ namespace Tensile_Test {
 
         void
         print_conv_footer();
+
+        void
+        print_vertical_tip_displacement();
 
 
 
@@ -979,7 +695,8 @@ namespace Tensile_Test {
             // ...solve the current time step and update total solution vector
             // $\mathbf{\Xi}_{\textrm{n}} = \mathbf{\Xi}_{\textrm{n-1}} +
             // \varDelta \mathbf{\Xi}$...
-            solve_nonlinear_timestep(solution_delta);
+//            solve_nonlinear_timestep(solution_delta);
+            solve_nonlinear_timestep_kinsol(solution_delta);
             solution_n += solution_delta;
 
             // ...and plot the results before moving on happily to the next time
@@ -987,321 +704,74 @@ namespace Tensile_Test {
             output_results();
             time.increment();
         }
-
+        print_vertical_tip_displacement();
 
     }
 
 
 // @sect3{Private interface}
 
-// @sect4{Solid::make_dog_bone_geometry}
 
-// This mesh was created by Benjamin Alheit and edited to fit the problem constraints. This function should only be called
-// when the geometry is to be changed. Some faces in this geometry are inside-out and therefore lead to errors if the triangulation
-// is not processed in gmsh first to reverse the offending faces.
-    inline double degrees_to_radians(const double &degrees) {
-        return degrees * (M_PI / 180.0);
+// @sect4{Solid::grid_y_transfrom}
+
+    template <int dim>
+    Point<dim> grid_y_transform (const Point<dim> &pt_in)
+    {
+        const double &x = pt_in[0];
+        const double &y = pt_in[1];
+
+        const double y_upper = 44.0 + (16.0/48.0)*x; // Line defining upper edge of beam
+        const double y_lower =  0.0 + (44.0/48.0)*x; // Line defining lower edge of beam
+        const double theta = y/44.0; // Fraction of height along left side of beam
+        const double y_transform = (1-theta)*y_lower + theta*y_upper; // Final transformation
+
+        Point<dim> pt_out = pt_in;
+        pt_out[1] = y_transform;
+
+        return pt_out;
     }
 
-    template<int dim, typename NumberType>
-    Triangulation<dim> Solid<dim, NumberType>::make_dog_bone_geometry(const double &thickness,
-                                                                      const double &gauge_length,
-                                                                      const double &gauge_width,
-                                                                      const double &fillet_radius,
-                                                                      const double &clamp_width,
-                                                                      const double &clamp_length,
-                                                                      const int &n_refinements,
-                                                                      const bool &output_all_triangulations,
-                                                                      const double &radius_multiplier) {
-        Triangulation<dim> starting_triangulation
-        , trimmed_triangulation
-        , clamp_upper_portion
-        , gauge_portion
-        , final_triangulation;
-
-        const double tol_boundary = 1e-6;
-
-        static const unsigned int trimmed_x_boundary_id = 5;
-        static const unsigned int trimmed_y_boundary_id = 6;
-        static const Tensor<1, 3> x_axis({1, 0, 0});
-        static const Tensor<1, 3> y_axis({0, 1, 0});
-        static const double degrees_90 = degrees_to_radians(90);
-
-
-        // Cells in this region will have TransfiniteInterpolationManifold with
-        // manifold id tfi_manifold_id attached to them. Additionally, the boundary
-        // faces of the hole will be associated with a PolarManifold (in 2D) or
-        // CylindricalManifold (in 3D):
-        double outer_radius = radius_multiplier * fillet_radius;
-
-        double pad_bottom = gauge_width - (outer_radius - fillet_radius);
-        double pad_top = pad_bottom;
-
-        double pad_left = clamp_length - (outer_radius - fillet_radius);
-        double pad_right = pad_left;
-
-        GridGenerator::plate_with_a_hole(starting_triangulation,
-                                         fillet_radius,
-                                         outer_radius,
-                                         pad_bottom,
-                                         pad_top,
-                                         pad_left,
-                                         pad_right,
-                /*const Point< dim > &  	center*/  Point<dim>(),
-                /*const types::manifold_id  	polar_manifold_id*/  0,
-                /*const types::manifold_id  	tfi_manifold_id*/  1,
-                                         thickness,
-                /*const unsigned int  	n_slices*/  2,
-                /*const bool  	colorize*/ true
-        );
-
-        if (n_refinements > 0)
-            starting_triangulation.refine_global((unsigned int) n_refinements);
-
-        // starting_triangulation is a plate with a hole centred at (0,0)
-        if (output_all_triangulations) {
-            std::ofstream out("starting_triangulation.vtk");
-            GridOut grid_out;
-            grid_out.write_vtk(starting_triangulation, out);
-        }
-
-        // As the hole is centered at (0,0), removing cells with centres in the positive x- and y-directions
-        // leaves the clamp and width areas adjacent to the fillet. This section shall be referred to as
-        // the 'heel' of the quarter-specimen.
-        set<typename Triangulation<dim>::active_cell_iterator> cells_to_remove;
-        for (const auto &cell: starting_triangulation.active_cell_iterators())
-            if (cell->center()[0] > 0 || cell->center()[1] > 0)
-                cells_to_remove.insert(cell);
-
-        GridGenerator::create_triangulation_with_removed_cells(starting_triangulation,
-                                                               cells_to_remove,
-                                                               trimmed_triangulation);
-
-        if (output_all_triangulations) {
-            std::ofstream out("trimmed_triangulation.vtk");
-            GridOut grid_out;
-            grid_out.write_vtk(trimmed_triangulation, out);
-        }
-
-        // The x and y boundaries of the heel are assigned boundary IDs to be used when the surface
-        // boundary is extracted.
-        for (const auto &face: trimmed_triangulation.active_face_iterators()) {
-            if (std::abs(face->center()[0] - 0.0) < tol_boundary)
-                face->set_boundary_id(trimmed_x_boundary_id);
-            else if (std::abs(face->center()[1] - 0.0) < tol_boundary)
-                face->set_boundary_id(trimmed_y_boundary_id);
-        }
-
-        Triangulation<dim - 1, dim> x_boundary_mesh, y_boundary_mesh;
-        Triangulation<dim - 1, dim - 1> flat_x_boundary_mesh, flat_y_boundary_mesh;
-
-
-        GridGenerator::extract_boundary_mesh(trimmed_triangulation,
-                                             x_boundary_mesh,
-                                             set<types::boundary_id>({trimmed_x_boundary_id}));
-        GridTools::rotate(y_axis, degrees_90, x_boundary_mesh);
-        GridGenerator::flatten_triangulation(x_boundary_mesh, flat_x_boundary_mesh);
-        GridGenerator::extrude_triangulation(flat_x_boundary_mesh,
-                                             (unsigned int) (4 * pow(2, n_refinements + 1) * gauge_length /
-                                                             gauge_width),
-                                             gauge_length,
-                                             gauge_portion);
-        GridTools::rotate(y_axis, degrees_90, gauge_portion);
-        if (output_all_triangulations) {
-            std::ofstream out("gauge_portion.vtk");
-            GridOut grid_out;
-            grid_out.write_vtk(gauge_portion, out);
-        }
-
-        double clamp_extrusion = clamp_width - gauge_width - fillet_radius;
-        GridGenerator::extract_boundary_mesh(trimmed_triangulation,
-                                             y_boundary_mesh,
-                                             set<types::boundary_id>({trimmed_y_boundary_id}));
-        GridTools::rotate(x_axis, -degrees_90, y_boundary_mesh);
-        GridGenerator::flatten_triangulation(y_boundary_mesh, flat_y_boundary_mesh);
-        GridGenerator::extrude_triangulation(flat_y_boundary_mesh,
-                                             (unsigned int) (4 * pow(2, n_refinements + 3) * clamp_extrusion /
-                                                             clamp_length),
-                                             clamp_extrusion,
-                                             clamp_upper_portion);
-        GridTools::rotate(x_axis, -degrees_90, clamp_upper_portion);
-        if (output_all_triangulations) {
-            std::ofstream out("clamp_upper_portion.vtk");
-            GridOut grid_out;
-            grid_out.write_vtk(clamp_upper_portion, out);
-        }
-
-        GridGenerator::merge_triangulations(vector<const Triangulation<dim> *>({&trimmed_triangulation,
-                                                                                &clamp_upper_portion,
-                                                                                &gauge_portion}),
-                                            final_triangulation);
-
-        if (output_all_triangulations) {
-            std::ofstream out("final_triangulation.vtk");
-            GridOut grid_out;
-            grid_out.write_vtk(final_triangulation, out);
-        }
-
-
-        for (auto &cell: final_triangulation.active_cell_iterators()) {
-            for (unsigned int i_face = 0; i_face < GeometryInfo<dim>::faces_per_cell; ++i_face) {
-                if (not cell->face_orientation(i_face))
-                    cout << "Cell " << cell->index() << " face " << i_face << "might be inside-out." << endl;
-
-            }
-        }
-
-
-        //The triangulation is exported in a gmsh format.
-        if (output_all_triangulations) {
-            GridOut grid_out;
-            std::cout << "final_triangulation.msh saved" << std::endl;
-            std::ofstream msh_out("final_triangulation.msh");
-            grid_out.template write_msh(final_triangulation, msh_out);
-        }
-
-        return final_triangulation;
-    }
 // @sect4{Solid::make_grid}
 
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::make_grid() {
         std::cout << "Polynomial degree: Q"<<parameters.poly_degree<<std::endl;
-        //Geometry of the dog bone in metres:
-        const double thickness = 0.001;
-        const double gauge_length = 0.0125;
-        const double gauge_width = 0.003;
-        const double fillet_radius = 0.001;
-        const double clamp_width = 0.005;
-        const double clamp_length = 0.012;
-        const int n_refinements = 0;
-        const bool output_all_triangulations = true;
-        const double &radius_multiplier = 1.25;
+        std::vector< unsigned int > repetitions(dim, parameters.elements_per_edge);
+        if (dim == 3)
+            repetitions[dim-1] = 1;
 
-        //Parameters relevant to full geometry
-        double outer_radius = radius_multiplier * fillet_radius;
-        double pad_bottom = gauge_width + fillet_radius;
-        double pad_left = clamp_length + fillet_radius;
-        std::ifstream input_file("reversed_triangulation_three.msh");
-        GridIn<dim> grid_in;
+        const Point<dim> bottom_left = (dim == 3 ? Point<dim>(0.0, 0.0, -0.5) : Point<dim>(0.0, 0.0));
+        const Point<dim> top_right = (dim == 3 ? Point<dim>(48.0, 44.0, 0.5) : Point<dim>(48.0, 44.0));
 
-        //Parameters for the gauge section
-        std::vector<unsigned int> repetitions(dim, 32);
-        const Point<dim> bottom_left = (dim == 3 ? Point<dim>(0.0, 0.0, -thickness) : Point<dim>(0.0, 0.0));
-        const Point<dim> top_right = (dim == 3 ? Point<dim>(2 * gauge_length, 2 * gauge_width, thickness)
-                                               : Point<dim>(2 * gauge_length, 2 * gauge_width));
+        GridGenerator::subdivided_hyper_rectangle(triangulation,
+                                                  repetitions,
+                                                  bottom_left,
+                                                  top_right);
 
-        //Boundary IDs
-        static const unsigned int x_symmetry_boundary_id = 11;
-        static const unsigned int y_symmetry_boundary_id = 1;
-        static const unsigned int z_symmetry_boundary_id = 22;
-        static const unsigned int neumann_boundary_id = 2;
-        static const unsigned int displacement_boundary_id = 4;
-
-
-
-/*To change the geometry, uncomment the function below and generate another .msh to be edited in gmsh. This is
- * because some element faces are flipped during the creation of the triangulation; it is easiest to identify
- * the elements with negative volume in the gmsh GUI and reverse the faces in a new mesh that is exported from
- * gmsh and loaded into the programme as below*/
-
-//        triangulation.copy_triangulation(Solid<dim,NumberType>::make_dog_bone_geometry(thickness,
-//                                                                                       gauge_length,
-//                                                                                       gauge_width,
-//                                                                                       fillet_radius,
-//                                                                                       clamp_width,
-//                                                                                       clamp_length,
-//                                                                                       n_refinements,
-//                                                                                       output_all_triangulations));
-
-        TriaIterator<TriaAccessor<dim - 1, dim, dim>>
-                current_face;
-        Point<dim> face_centre;
-
-        //Mesh processed in gmsh (manually) is imported:
-        switch(parameters.sim_geom){
-            case 1: // Full geometry
-                std::cout << "Geometry: Eighth symmetry of full geometry" << std::endl;
-                grid_in.attach_triangulation(triangulation);
-                grid_in.read_msh(input_file);
-                triangulation.refine_global(1);
-                for (auto &cell: triangulation.active_cell_iterators()) {
-                    if (cell->at_boundary())
-                        for (unsigned int i_face = 0; i_face < GeometryInfo<dim>::faces_per_cell; ++i_face) {
-                            current_face = cell->face(i_face);
-                            if (current_face->at_boundary()) {
-                                face_centre = current_face->center();
-                                if (almost_equals(face_centre[1], -pad_bottom)) {
-                                    current_face->set_boundary_id(y_symmetry_boundary_id);
-                                } // Y-face at symmetry line
-                                else if (almost_equals(face_centre[0], gauge_length)) {
-                                    current_face->set_boundary_id(x_symmetry_boundary_id);
-                                } // X-face at symmetry line
-                                else if (almost_equals(face_centre[0], -pad_left)) {
-                                    current_face->set_boundary_id(displacement_boundary_id);
-                                }// X-face at displaced boundary
-                                else if (dim == 3 && almost_equals(face_centre[2], thickness * 0.5)) {
-                                    current_face->set_boundary_id(neumann_boundary_id);
-                                } // +Z-face
-                                else if (dim == 3 && almost_equals(face_centre[2], -thickness * 0.5)) {
-                                    current_face->set_boundary_id(z_symmetry_boundary_id);
-                                } // -Z-face
-                            }
-                        }
+        const double tol_boundary = 1e-6;
+        typename Triangulation<dim>::active_cell_iterator cell =
+                triangulation.begin_active(), endc = triangulation.end();
+        for (; cell != endc; ++cell)
+            for (unsigned int face = 0;
+                 face < GeometryInfo<dim>::faces_per_cell; ++face)
+                if (cell->face(face)->at_boundary() == true)
+                {
+                    if (std::abs(cell->face(face)->center()[0] - 0.0) < tol_boundary)
+                        cell->face(face)->set_boundary_id(1); // -X faces
+                    else if (std::abs(cell->face(face)->center()[0] - 48.0) < tol_boundary)
+                        cell->face(face)->set_boundary_id(11); // +X faces
+                    else if (dim == 3 && std::abs(std::abs(cell->face(face)->center()[2]) - 0.5) < tol_boundary)
+                        cell->face(face)->set_boundary_id(2); // +Z and -Z faces
                 }
 
-                break;
+        GridTools::transform(&grid_y_transform<dim>, triangulation);
 
-            case 2: //Gauge section only
-
-                std::cout<< "Geometry: Gauge section only" << std::endl;
-
-                if (dim == 3)
-                    repetitions[dim - 1] = 1;
-
-                GridGenerator::subdivided_hyper_rectangle(triangulation,
-                                                          repetitions,
-                                                          bottom_left,
-                                                          top_right);
-                for (auto &cell: triangulation.active_cell_iterators()) {
-                    if (cell->at_boundary())
-                        for (unsigned int i_face = 0; i_face < GeometryInfo<dim>::faces_per_cell; ++i_face) {
-                            current_face = cell->face(i_face);
-                            if (current_face->at_boundary()) {
-                                face_centre = current_face->center();
-                                if (almost_equals(face_centre[1], 0)) {
-                                    current_face->set_boundary_id(y_symmetry_boundary_id);
-                                } // Y-face at symmetry line
-                                else if (almost_equals(face_centre[0], 0)) {
-                                    current_face->set_boundary_id(x_symmetry_boundary_id);
-                                } // X-face at symmetry line
-                                else if (almost_equals(face_centre[0], 2*gauge_length)) {
-                                    current_face->set_boundary_id(displacement_boundary_id);
-                                }// X-face at displaced boundary
-                                else if (dim == 3 && almost_equals(face_centre[2], thickness)) {
-                                    current_face->set_boundary_id(neumann_boundary_id);
-                                } // +Z-face
-                                else if (dim == 3 && almost_equals(face_centre[2], -thickness)) {
-                                    current_face->set_boundary_id(z_symmetry_boundary_id);
-                                } // -Z-face
-                            }
-                        }
-                }
-
-                break;
-
-            default:
-            AssertThrow(false,
-                        ExcMessage("Nonexistent simulation geometry chosen."))
-
-
-        }
-
-
+        GridTools::scale(parameters.scale, triangulation);
 
         vol_reference = GridTools::volume(triangulation);
         vol_current = vol_reference;
         std::cout << "Grid:\n\t Reference volume: " << vol_reference << std::endl;
+
     }
 
 
@@ -1362,8 +832,6 @@ namespace Tensile_Test {
         solution_n.reinit(dofs_per_block);
         solution_n.collect_sizes();
 
-        green_strain.reinit(dofs_per_block);
-        green_strain.collect_sizes();
         // ...and finally set up the quadrature
         // point history:
         setup_qph();
@@ -1399,6 +867,102 @@ namespace Tensile_Test {
                 lqph[q_point]->setup_lqp(parameters);
         }
     }
+
+//    //Ernesto Kinsol:
+//        template<int dim, typename NumberType>
+//        unsigned int
+//        Solid<dim, NumberType>::solve_nonlinear_timestep_kinsol(BlockVector<double> &solution_delta) {
+
+//            std::cout << std::endl << "Timestep " << time.get_timestep() << " @ "
+//                      << time.current() << "s" << std::endl;
+
+//            double newton_iteration = 0;
+
+//            compute_and_factorize_jacobian(solution_n, newton_iteration);
+//            solve_linear_kinsol(system_rhs,solution_n);
+//            newton_iteration++;
+
+//            double target_tolerance = 1.0e-8;
+//            double step_tolerance = 1e-6;
+
+//            typename SUNDIALS::KINSOL<BlockVector<double>>::AdditionalData
+//                    additional_data;
+//            additional_data.function_tolerance = target_tolerance;
+//    //        additional_data.step_tolerance = step_tolerance;
+
+//            SUNDIALS::KINSOL<BlockVector<double>> nonlinear_solver(additional_data);
+
+//            nonlinear_solver.reinit_vector = [&](BlockVector<double> &x) {
+
+//                const types::global_dof_index n_dofs_u = dofs_per_block[u_dof];
+//                x.reinit (dofs_per_block);
+//                x.collect_sizes ();
+//            };
+
+
+//            nonlinear_solver.residual =
+
+//                    [&](const BlockVector<double> &evaluation_point_in,
+//                    BlockVector<double> & residual_vector_kinsol)
+//            {
+
+//                BlockVector<double> solution_delta_internal = evaluation_point_in;
+//                solution_delta_internal -= solution_n;
+
+//                assemble_system(solution_delta_internal, /*rhs_only*/ true);
+
+//                for (unsigned int i = 0; i < dof_handler_ref.n_dofs(); ++i)
+//                    if (!constraints.is_constrained(i))
+//                        residual_vector_kinsol(i) = -system_rhs(i);
+
+//                cout<<"res: "<<residual_vector_kinsol.l2_norm()<<endl;
+
+//                return 0;
+//            };
+
+//            nonlinear_solver.setup_jacobian =
+
+//                    [&](const BlockVector<double> &current_u,
+//                    const BlockVector<double> & /*current_f*/)
+//            {
+
+//                compute_and_factorize_jacobian(current_u, newton_iteration);
+//                newton_iteration++;
+
+//                return 0;
+//            };
+
+//            nonlinear_solver.solve_with_jacobian = [&](const BlockVector<double> &rhs,
+//                    BlockVector<double> &      dst,
+//                    const double tolerance)
+//            {
+//                this->solve_linear_kinsol(rhs, dst);
+
+//                return 0;
+//            };
+
+//            return nonlinear_solver.solve(solution_n);
+//        }
+
+//        template<int dim, typename NumberType>
+//        void
+//        Solid<dim, NumberType>::compute_and_factorize_jacobian(const BlockVector<double> &newton_update_in, const double newton_iteration)
+//        {
+//            make_constraints(newton_iteration);
+
+//            assemble_system(newton_update_in, /*rhs_only*/ false);
+//            jacobian_matrix_factorization = std::make_unique<SparseDirectUMFPACK>();
+//            jacobian_matrix_factorization->factorize(tangent_matrix);
+//        }
+
+//        template<int dim, typename NumberType>
+//        void
+//        Solid<dim, NumberType>::solve_linear_kinsol(const BlockVector<double> &rhs,
+//                                               BlockVector<double> &present_solution)
+//        {
+//          jacobian_matrix_factorization->vmult(present_solution, rhs);
+//          constraints.distribute(present_solution);
+//        }
 
 
 // @sect4{Solid::solve_nonlinear_timestep}
@@ -1443,7 +1007,7 @@ namespace Tensile_Test {
             // assemble the tangent, make and impose the Dirichlet constraints,
             // and do the solve of the linearized system:
             make_constraints(newton_iteration);
-            assemble_system(solution_delta);
+            assemble_system(solution_delta, /*rhs_only*/ false);
 
             get_error_residual(error_residual);
 
@@ -1539,6 +1103,45 @@ namespace Tensile_Test {
                   << std::endl;
     }
 
+    template<int dim, typename NumberType>
+    void Solid<dim, NumberType>::print_vertical_tip_displacement(){
+        static const unsigned int l_width = 87;
+
+        for (unsigned int i = 0; i < l_width; ++i)
+            std::cout << "_";
+        std::cout <<std::endl;
+        const Point<dim> soln_pt = (dim == 3?
+                                    Point<dim>(48.0*parameters.scale, 52.0*parameters.scale, 0.5*parameters.scale):
+                                    Point<dim>(48.0*parameters.scale, 52.0*parameters.scale));
+        double vertical_tip_displacement = 0.0;
+        double vertical_tip_displacement_check = 0.0;
+
+        typename DoFHandler<dim>::active_cell_iterator cell =
+                dof_handler_ref.begin_active(), endc = dof_handler_ref.end();
+        for (; cell != endc; ++cell){
+            for (unsigned int v=0; v<GeometryInfo<dim>::vertices_per_cell; ++v)
+                if (cell->vertex(v).distance(soln_pt) < 1e-6)
+                {
+                    vertical_tip_displacement = solution_n(cell->vertex_dof_index(v,u_dof+1));
+
+                    const MappingQ<dim> mapping (parameters.poly_degree);
+                    const Point<dim> qp_unit = mapping.transform_real_to_unit_cell(cell, soln_pt);
+                    const Quadrature<dim> soln_qrule (qp_unit);
+                    AssertThrow(soln_qrule.size() == 1, ExcInternalError());
+                    FEValues<dim> fe_values_soln (fe, soln_qrule, update_values);
+                    fe_values_soln.reinit(cell);
+                    std::vector<Tensor<1, dim>> soln_values (soln_qrule.size());
+                    fe_values_soln[u_fe].get_function_values(solution_n,
+                                                             soln_values);
+                    vertical_tip_displacement_check = soln_values[0][u_dof+1];
+                    break;
+                }
+        }
+        AssertThrow(vertical_tip_displacement > 0.0, ExcMessage("Found no cell with point inside!"))
+        std::cout << "Vertical tip displacement: " << vertical_tip_displacement
+                  << "\t Check: " << vertical_tip_displacement_check << std::endl;
+    }
+
 
 
 // @sect4{Solid::get_error_residual}
@@ -1605,19 +1208,22 @@ namespace Tensile_Test {
             Vector<double> cell_strain;
             Vector<double> cell_rhs;
             std::vector<types::global_dof_index> local_dof_indices;
+            bool rhs_only;
 
-            Local_ASM(const Solid<dim, NumberType> *solid)
+            Local_ASM(const Solid<dim, NumberType> *solid, const double rhs_only_in)
                     :
                     solid(solid),
                     cell_matrix(solid->dofs_per_cell, solid->dofs_per_cell),
                     cell_rhs(solid->dofs_per_cell),
                     cell_strain(solid->dofs_per_cell),
-                    local_dof_indices(solid->dofs_per_cell) {}
+                    local_dof_indices(solid->dofs_per_cell),
+                    rhs_only(rhs_only_in){}
 
             void reset() {
                 cell_matrix = 0.0;
                 cell_strain = 0.0;
                 cell_rhs = 0.0;
+//                rhs_only = false;
             }
         };
 
@@ -1634,14 +1240,17 @@ namespace Tensile_Test {
 
             std::vector<std::vector<Tensor<2, dim, NumberType> > > grad_Nx;
             std::vector<std::vector<SymmetricTensor<2, dim, NumberType> > >
-                    symm_grad_Nx;
+            symm_grad_Nx;
+
+            bool rhs_only;
 
             ScratchData_ASM(const FiniteElement<dim> &fe_cell,
                             const QGauss<dim> &qf_cell,
                             const UpdateFlags uf_cell,
                             const QGauss<dim - 1> &qf_face,
                             const UpdateFlags uf_face,
-                            const BlockVector<double> &solution_total)
+                            const BlockVector<double> &solution_total,
+                            const bool rhs_only_in)
                     :
                     solution_total(solution_total),
                     solution_grads_u_total(qf_cell.size()),
@@ -1651,7 +1260,9 @@ namespace Tensile_Test {
                             std::vector<Tensor<2, dim, NumberType> >(fe_cell.dofs_per_cell)),
                     symm_grad_Nx(qf_cell.size(),
                                  std::vector<SymmetricTensor<2, dim, NumberType> >
-                                         (fe_cell.dofs_per_cell)) {}
+                                 (fe_cell.dofs_per_cell)),
+                  rhs_only(rhs_only_in)
+            {}
 
             ScratchData_ASM(const ScratchData_ASM &rhs)
                     :
@@ -1707,17 +1318,26 @@ namespace Tensile_Test {
         copy_local_to_global_ASM(const Local_ASM &data) {
             const AffineConstraints<double> &constraints = data.solid->constraints;
             BlockSparseMatrix<double> &tangent_matrix = const_cast<Solid<dim, NumberType> *>(data.solid)->tangent_matrix;
-            BlockVector<double> &green_strain = const_cast<Solid<dim, NumberType> *>(data.solid)->green_strain;
             BlockVector<double> &system_rhs = const_cast<Solid<dim, NumberType> *>(data.solid)->system_rhs;
 
+            if(data.rhs_only == false){
             constraints.distribute_local_to_global(
                     data.cell_matrix, data.cell_rhs,
                     data.local_dof_indices,
                     tangent_matrix, system_rhs);
 
-            constraints.distribute_local_to_global(
-                    data.cell_strain, data.local_dof_indices,
-                    green_strain);
+
+            }
+            else{
+                constraints.distribute_local_to_global(
+                        data.cell_rhs,
+                        data.local_dof_indices,
+                        system_rhs);
+//                cout<<"doing RHS only assembly"<<endl;
+
+
+            }
+
         }
 
     protected:
@@ -1742,7 +1362,6 @@ namespace Tensile_Test {
             const Time &time = data.solid->time;
             const FESystem<dim> &fe = data.solid->fe;
             const unsigned int &u_dof = data.solid->u_dof;
-            static const unsigned int neumann_boundary_id = 2;
 
             // Next we assemble the Neumann contribution. We first check to see it the
             // cell face exists on a boundary on which a traction is applied and add
@@ -1750,7 +1369,7 @@ namespace Tensile_Test {
             for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell;
                  ++face)
                 if (cell->face(face)->at_boundary() == true
-                    && cell->face(face)->boundary_id() == neumann_boundary_id) {
+                    && cell->face(face)->boundary_id() == 11) {
                     scratch.fe_face_values_ref.reinit(cell, face);
 
                     for (unsigned int f_q_point = 0; f_q_point < n_q_points_f;
@@ -1767,9 +1386,9 @@ namespace Tensile_Test {
 
 
                         const double time_ramp = (time.current() / time.end());
-                        const double magnitude = 0.0 * time_ramp;
+                        const double magnitude = (1.0/(16.0*parameters.scale*1.0*parameters.scale))*time_ramp;
                         Tensor<1, dim> dir;
-                        dir[2] = 1.0;
+                        dir[1] = 1.0;
                         const Tensor<1, dim> traction = magnitude * dir;
 
                         for (unsigned int i = 0; i < dofs_per_cell; ++i) {
@@ -1875,7 +1494,8 @@ namespace Tensile_Test {
                         data.cell_rhs(i) -= (symm_grad_Nx[i] * tau) * JxW;
                     else Assert(i_group <= u_dof, ExcInternalError());
 
-
+                    // matrix only calcs
+                    if(data.rhs_only == false){
                     for (unsigned int j = 0; j <= i; ++j) {
                         const unsigned int component_j = fe.system_to_component_index(j).first;
                         const unsigned int j_group = fe.system_to_base_index(j).first.first;
@@ -1892,18 +1512,20 @@ namespace Tensile_Test {
                         } else Assert((i_group <= u_dof) && (j_group <= u_dof),
                                       ExcInternalError());
                     }
+}
                 }
             }
 
 
             // Finally, we need to copy the lower half of the local matrix into the
             // upper half:
+            if(data.rhs_only == false){
             for (unsigned int i = 0; i < dofs_per_cell; ++i)
                 for (unsigned int j = i + 1; j < dofs_per_cell; ++j) {
                     data.cell_matrix(i, j) = data.cell_matrix(j, i);
                 }
         }
-
+}
     };
 
 
@@ -1913,13 +1535,19 @@ namespace Tensile_Test {
 // WorkStream object for processing. Note that we must ensure that
 // the matrix is reset before any assembly operations can occur.
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::assemble_system(const BlockVector<double> &solution_delta) {
+    void Solid<dim, NumberType>::assemble_system(const BlockVector<double> &solution_delta, const bool rhs_only) {
         timer.enter_subsection("Assemble linear system");
-        std::cout << " ASM " << std::flush;
+        if(rhs_only == false)
+        {
+            std::cout << " ASM_T " << std::flush;
+            tangent_matrix = 0.0;
+        }
+        else
+        {
+            std::cout << " ASM_R " << std::flush;
+        }
 
-        tangent_matrix = 0.0;
         system_rhs = 0.0;
-        green_strain = 0.0;
 
         const UpdateFlags uf_cell(update_gradients |
                                   update_JxW_values);
@@ -1927,9 +1555,9 @@ namespace Tensile_Test {
                                   update_JxW_values);
 
         const BlockVector<double> solution_total(get_total_solution(solution_delta));
-        typename Assembler_Base<dim, NumberType>::Local_ASM per_task_data(this);
+        typename Assembler_Base<dim, NumberType>::Local_ASM per_task_data(this, rhs_only);
         typename Assembler_Base<dim, NumberType>::ScratchData_ASM scratch_data(fe, qf_cell, uf_cell, qf_face, uf_face,
-                                                                               solution_total);
+                                                                               solution_total, rhs_only);
         Assembler<dim, NumberType> assembler;
 
         WorkStream::run(dof_handler_ref.begin_active(),
@@ -1990,63 +1618,33 @@ namespace Tensile_Test {
                 double time_end = time.end();
                 double delta_t = time.get_delta_t();
                 int number_of_steps = time_end / delta_t;
-                double symmetric_displacement;
-                switch(parameters.sim_geom){
-                    case 1:
-                        symmetric_displacement = -0.02;
-                        break;
-                    case 2:
-                        symmetric_displacement = 0.04;
-                        break;
 
-                    default:
-                    AssertThrow(false,
-                                ExcMessage("Dirichlet boundary condition cannot be applied with chosen geometry."))
+
+                {
+                    const int boundary_id = 1;
+                    VectorTools::interpolate_boundary_values(dof_handler_ref,
+                                                             boundary_id,
+                                                             Functions::ZeroFunction<dim>(n_components),
+                                                             constraints,
+                                                             fe.component_mask(u_fe));
                 }
 
-
-                static const unsigned int x_symmetry_boundary_id = 11;
-                static const unsigned int y_symmetry_boundary_id = 1;
-
-                static const unsigned int displacement_boundary_id = 4;
-                const FEValuesExtractors::Scalar x_displacement(0);
-                const FEValuesExtractors::Scalar y_displacement(1);
-
-                // x-symmetry
-                VectorTools::interpolate_boundary_values(dof_handler_ref,
-                                                         x_symmetry_boundary_id,
-                                                         Functions::ZeroFunction<dim>(n_components),
-                                                         constraints,
-                                                         fe.component_mask(x_displacement));
-
-                // y-symmetry;
-                VectorTools::interpolate_boundary_values(dof_handler_ref,
-                                                         y_symmetry_boundary_id,
-                                                         Functions::ZeroFunction<dim>(n_components),
-                                                         constraints,
-                                                         fe.component_mask(y_displacement));
-
-                // Displacement driven right hand side of the beam
-                double displacement = symmetric_displacement / number_of_steps;
-                VectorTools::interpolate_boundary_values(dof_handler_ref,
-                                                         displacement_boundary_id,
-                                                         Functions::ConstantFunction<dim>(displacement, n_components),
-                                                         constraints,
-                                                         fe.component_mask(x_displacement));
+                if (dim == 3)
+                {
+                    const int boundary_id = 2;
+                    const FEValuesExtractors::Scalar z_displacement(2);
+                    VectorTools::interpolate_boundary_values(dof_handler_ref,
+                                                             boundary_id,
+                                                             Functions::ZeroFunction<dim>(n_components),
+                                                             constraints,
+                                                             fe.component_mask(z_displacement));
+                }
 
             }
 
             // Zero Z-displacement through thickness direction
             // This corresponds to a plane stress condition being imposed on the beam
-            if (dim == 3) {
-                static const unsigned int z_symmetry_boundary_id = 22;
-                const FEValuesExtractors::Scalar z_displacement(2);
-                VectorTools::interpolate_boundary_values(dof_handler_ref,
-                                                         z_symmetry_boundary_id,
-                                                         Functions::ZeroFunction<dim>(n_components),
-                                                         constraints,
-                                                         fe.component_mask(z_displacement));
-            }
+
         } else {
             if (constraints.has_inhomogeneities()) {
                 AffineConstraints<double> homogeneous_constraints(constraints);
@@ -2159,68 +1757,16 @@ namespace Tensile_Test {
         data_out.build_patches();
         std::ostringstream filename;
         string file;
-        switch(parameters.sim_geom){
-            case 1:
-                file = "Q"+to_string(parameters.poly_degree)+"full_geom_tensiletest_solution-" + to_string(time.get_timestep()) + ".vtu";
-                break;
-            case 2:
-                file = "Q"+to_string(parameters.poly_degree)+"gauge_tensiletest_solution-" + to_string(time.get_timestep()) + ".vtu";
-                break;
-        }
+
+        file = "Q"+to_string(parameters.poly_degree)+"cooks-membrane_solution-" + to_string(time.get_timestep()) + ".vtu";
+
         std::ofstream output(file.c_str());
         data_out.write_vtu(output);
 
     }
-
 }
 
 
-// @sect3{Main function}
-// Lastly we provide the main driver function which appears
-// no different to the other tutorials.
-int main(int argc, char *argv[]) {
-    using namespace dealii;
-    using namespace Tensile_Test;
-
-    const unsigned int dim = 3;
-
-    try {
-        deallog.depth_console(0);
-        Parameters::AllParameters parameters("problem1_parameters.prm");
 
 
-        std::cout << "Assembly method: Residual and linearisation are computed manually." << std::endl;
-
-        // Allow multi-threading
-        Utilities::MPI::MPI_InitFinalize mpi_initialization(argc, argv,
-                                                            dealii::numbers::invalid_unsigned_int);
-        typedef double NumberType;
-        Solid<dim, NumberType> solid_3d(parameters);
-        solid_3d.run();
-
-
-    }
-    catch (std::exception &exc) {
-        std::cerr << std::endl << std::endl
-                  << "----------------------------------------------------"
-                  << std::endl;
-        std::cerr << "Exception on processing: " << std::endl << exc.what()
-                  << std::endl << "Aborting!" << std::endl
-                  << "----------------------------------------------------"
-                  << std::endl;
-
-        return 1;
-    }
-    catch (...) {
-        std::cerr << std::endl << std::endl
-                  << "----------------------------------------------------"
-                  << std::endl;
-        std::cerr << "Unknown exception!" << std::endl << "Aborting!"
-                  << std::endl
-                  << "----------------------------------------------------"
-                  << std::endl;
-        return 1;
-    }
-
-    return 0;
-}
+#endif // TENSILETEST_H

@@ -1,23 +1,22 @@
-SET(TARGET "emma-topics-project")
-SET(CMAKE_CXX_STANDARD 17)
+cmake_minimum_required(VERSION 3.5)
 
+PROJECT(emma-topics-project)
 
-FILE(GLOB_RECURSE TARGET_SRC "Problem2/*.cc" "Problem2/*.prm" )
-#FILE(GLOB_RECURSE TARGET_SRC "Problem1/*.cc" "Problem1/*.prm" "Problem2/*.cc" "Problem2/*.prm" "Problem3/*.cc" "Problem3/*.prm")
-SET(TARGET_SRC ${TARGET_SRC} ${TARGET_INC})
-
-#include_directories(.)
-#include_directories(Problem1)
-#include_directories(Problem2)
-
-#add_executable(emma-topics-project Problem1/tensile-test.cc)
-#add_executable(emma-topics-project Problem2/cooks-membrane.cc)
-
-CMAKE_MINIMUM_REQUIRED(VERSION 3.1.0)
+file(GLOB PART1_SRCS Problem1/*.cc )
+file(GLOB PART2_SRCS Problem2.1/*.cc Problem2.1/*.h)
 
 FIND_PACKAGE(deal.II 9.4.0
-        HINTS ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
+        HINTS /home/emma/dealii-candi/deal.II-v9.4.0 ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
         )
+DEAL_II_INITIALIZE_CACHED_VARIABLES()
+
+ADD_EXECUTABLE( part1 ${PART1_SRCS})
+DEAL_II_SETUP_TARGET(part1)
+
+ADD_EXECUTABLE( part2 ${PART2_SRCS})
+DEAL_II_SETUP_TARGET(part2)
+
+CMAKE_MINIMUM_REQUIRED(VERSION 3.1.0)
 
 IF(NOT ${deal.II_FOUND})
     MESSAGE(FATAL_ERROR "\n"
@@ -36,7 +35,3 @@ However, the deal.II library found at ${DEAL_II_PATH} was configured with these 
 This conflicts with the requirements."
             )
 ENDIF()
-
-DEAL_II_INITIALIZE_CACHED_VARIABLES()
-PROJECT(${TARGET})
-DEAL_II_INVOKE_AUTOPILOT()

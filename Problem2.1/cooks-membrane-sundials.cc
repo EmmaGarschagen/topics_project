@@ -18,7 +18,7 @@ bool almost_equals(const double &a,
     return fabs(a - b) < tol;
 }
 
-namespace Tensile_Test {
+namespace Cooks_Membrane {
     using namespace dealii;
     using namespace std;
 
@@ -30,7 +30,7 @@ namespace Tensile_Test {
 
 int main(int argc, char *argv[]) {
     using namespace dealii;
-    using namespace Tensile_Test;
+    using namespace Cooks_Membrane;
 
     const unsigned int dim = 3;
 

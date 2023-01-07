@@ -1,5 +1,5 @@
-#ifndef TENSILETEST_H
-#define TENSILETEST_H
+#ifndef COOKSMEMBRANE_H
+#define COOKSMEMBRANE_H
 
 /* ---------------------------------------------------------------------
  * Problem 1: Finite Deformation Elasticit
@@ -82,7 +82,7 @@ bool almost_equals(const double &a,
 //    return fabs(a - b) < tol;
 //}
 
-namespace Tensile_Test {
+namespace Cooks_Membrane {
     using namespace dealii;
     using namespace Physics::Transformations;
     using namespace Physics::Elasticity;
@@ -97,33 +97,27 @@ inline double degrees_to_radians(const double &degrees) {
 
 
 
-// @sect3{Compressible neo-Hookean material within a one-field formulation}
+// @sect3{Compressible Mooney_Rivlin material within a one-field formulation}
 
 
     template<int dim, typename NumberType>
-    class Material_Compressible_Neo_Hook_One_Field {
+    class Material_Compressible_Mooney_Rivlin_One_Field {
     public:
-        Material_Compressible_Neo_Hook_One_Field(const double mu,
-                                                 const double nu)
+        Material_Compressible_Mooney_Rivlin_One_Field(const Parameters::AllParameters &parameters)
                 :
-                c_1(mu / 2.0),
-                beta((nu) / (1 - 2 * nu)) {}
+                c0(parameters.c0),
+                c1(parameters.c1),
+                c2(parameters.c2)
+                 {}
 
-        ~Material_Compressible_Neo_Hook_One_Field() {}
+        ~Material_Compressible_Mooney_Rivlin_One_Field() {}
 
-
-        NumberType
-        get_Psi(const NumberType &det_F,
-                const SymmetricTensor<2, dim, NumberType> &C) const {
-            return (c_1 / beta) * (std::pow(det_F, -2 * beta) - 1) + c_1 * (trace(C) - dim);
-        }
 
         SymmetricTensor<2, dim, NumberType>
-        get_tau(const NumberType &det_F,
-                const Tensor<2, dim, NumberType> &F,
-                const Tensor<2, dim, NumberType> &C_inv) {
-            // See Holzapfel p231 eq6.98 onwards
-            return det_F * get_CauchyStress(det_F, F, C_inv);
+        get_tau(const SymmetricTensor<2, dim, NumberType> &C,
+                const NumberType &det_F,
+                const Tensor<2, dim, NumberType> &F) {
+            return det_F * get_CauchyStress(C, det_F, F);
         }
 
         SymmetricTensor<2, dim, NumberType>
@@ -133,56 +127,60 @@ inline double degrees_to_radians(const double &degrees) {
 
 
         SymmetricTensor<2, dim, NumberType>
-        get_CauchyStress(const NumberType &det_F,
-                         const Tensor<2, dim, NumberType> &F,
-                         const Tensor<2, dim, NumberType> &C_inv) {
-            return symmetrize(pow(det_F, -1) * F * get_SecondPiolaStress(det_F, C_inv) * transpose(F));
+        get_CauchyStress(const SymmetricTensor<2, dim, NumberType> &C,
+                         const NumberType &det_F,
+                         const Tensor<2, dim, NumberType> &F) {
+            return symmetrize(pow(det_F, -1) * F * get_SecondPiolaStress(C, det_F) * transpose(F));
         }
 
 
         SymmetricTensor<2, dim, NumberType>
         get_CauchyStress(const Tensor<2, dim, NumberType> &F) {
-
             const NumberType det_F = determinant(F);
-//            const Tensor<2, dim, NumberType> C_inv = inverse(transpose(F) * F);
-            const Tensor<2, dim, NumberType> C_inv = invert(transpose(F) * F);
+            const SymmetricTensor<2, dim, NumberType> C = symmetrize(transpose(F) * F);
 
-            return this->get_CauchyStress(det_F, F, C_inv);
+            return this->get_CauchyStress(C, det_F, F);
         }
 
-        SymmetricTensor<2, dim, NumberType>
-        get_SecondPiolaStress(const NumberType &det_F,
-                              const Tensor<2, dim, NumberType> &C_inv) {
-            return symmetrize(2 * c_1 * (Physics::Elasticity::StandardTensors<dim>::I - pow(det_F, -2 * beta) * C_inv));
-        }
+
 
 
         SymmetricTensor<2, dim, NumberType>
         get_SecondPiolaStress(const Tensor<2, dim, NumberType> &F) {
             const NumberType det_F = determinant(F);
-            const Tensor<2, dim, NumberType> C_inv = inverse(transpose(F) * F);
+            const SymmetricTensor<2, dim, NumberType> C = transpose(F) * F;
 
-            return this->get_SecondPiolaStress(det_F, C_inv);
+            return this->get_SecondPiolaStress(C, det_F);
 
         }
 
         SymmetricTensor<4, dim, NumberType>
-        get_Jc(const NumberType &det_F,
-               const SymmetricTensor<2, dim, NumberType> &C_inv,
+        get_Jc(const SymmetricTensor<2, dim, NumberType> &C,
+               const NumberType &det_F,
                const Tensor<2, dim, NumberType> &F) const {
             return det_F *
-                   Physics::Transformations::Piola::push_forward(get_LagrangeElasticityTensor(det_F, C_inv, F), F);
+                   Physics::Transformations::Piola::push_forward(get_LagrangeElasticityTensor(C, det_F, F), F);
         }
 
-        const double c_1;
-        const double beta;
+        const double c0;
+        const double c1;
+        const double c2;
+        const double d = 2*(c1 + 2*c2);
+//        const double d = 0;
+
+        SymmetricTensor<2, dim, NumberType>
+        get_SecondPiolaStress(const SymmetricTensor<2, dim, NumberType> &C,
+                              const NumberType &det_F) {
+            return 2 * (c1 + c2 * trace(C)) * unit_symmetric_tensor<dim>() - 2 * c2 * C + (2*c0*det_F*(det_F-1) - d)*invert(C);
+        }
 
         SymmetricTensor<4, dim, NumberType>
-        get_LagrangeElasticityTensor(const NumberType &det_F,
-                                     const SymmetricTensor<2, dim, NumberType> &C_inv,
+        get_LagrangeElasticityTensor(const SymmetricTensor<2, dim, NumberType> &C,
+                                     const NumberType &det_F,
                                      const Tensor<2, dim, NumberType> &F) const {
-            return 4 * c_1 * pow(det_F, -2 * beta) *
-                   (beta * outer_product(C_inv, C_inv) - Physics::Elasticity::StandardTensors<dim>::dC_inv_dC(F));
+            const SymmetricTensor<2, dim, NumberType> C_inv = invert(C);
+            return 4*c2*Physics::Elasticity::StandardTensors< dim >::IxI + 2*c0*det_F*(2*det_F-1)*outer_product(C_inv, C_inv)
+            -  2*(2*c0*det_F*(det_F-1) - d)*Physics::Elasticity::StandardTensors< dim >::dC_inv_dC(F) - 4*c2* Physics::Elasticity::StandardTensors< dim >::S;
         }
 
     };
@@ -274,7 +272,7 @@ inline double degrees_to_radians(const double &degrees) {
                             computed_quantities.size());
             SymmetricTensor<2, dim, NumberType> stress;
             Tensor<2, dim, NumberType> F;
-            Material_Compressible_Neo_Hook_One_Field<dim, NumberType> material(parameters.mu, parameters.nu);
+            Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material(parameters);
             for (unsigned int p = 0; p < input_data.solution_gradients.size(); ++p) {
 
                 AssertDimension(computed_quantities[p].size(),
@@ -314,7 +312,7 @@ inline double degrees_to_radians(const double &degrees) {
                             computed_quantities.size());
             SymmetricTensor<2, dim, NumberType> strain;
             Tensor<2, dim, NumberType> F;
-            Material_Compressible_Neo_Hook_One_Field<dim, NumberType> material(parameters.mu, parameters.nu);
+            Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material(parameters);
             for (unsigned int p = 0; p < input_data.solution_gradients.size(); ++p) {
 
                 AssertDimension(computed_quantities[p].size(),
@@ -361,22 +359,13 @@ inline double degrees_to_radians(const double &degrees) {
         // values and stresses based on the current deformation measure
         // $\textrm{Grad}\mathbf{u}_{\textrm{n}}$.
         void setup_lqp(const Parameters::AllParameters &parameters) {
-            material.reset(new Material_Compressible_Neo_Hook_One_Field<dim, NumberType>(parameters.mu,
-                                                                                         parameters.nu));
-        }
-
-        // We offer an interface to retrieve certain data.
-        // This is the strain energy:
-        NumberType
-        get_Psi(const NumberType &det_F,
-                const SymmetricTensor<2, dim, NumberType> &C) const {
-            return material->get_Psi(det_F, C);
+            material.reset(new Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType>(parameters));
         }
 
         SymmetricTensor<2, dim, NumberType>
-        get_SecondPiolaStress(const NumberType &det_F,
-                              const Tensor<2, dim, NumberType> &C_inv) const {
-            return material->get_SecondPiolaStress(det_F, C_inv);
+        get_SecondPiolaStress(const Tensor<2, dim, NumberType> &C,
+                              const NumberType &det_F) const {
+            return material->get_SecondPiolaStress(C, det_F);
         }
 
         SymmetricTensor<2, dim, NumberType>
@@ -388,32 +377,32 @@ inline double degrees_to_radians(const double &degrees) {
         // global tangent matrix and residual assembly operations:
         // First is the Kirchhoff stress:
         SymmetricTensor<2, dim, NumberType>
-        get_tau(const NumberType &det_F,
-                const Tensor<2, dim, NumberType> &F,
-                const Tensor<2, dim, NumberType> &C_inv) const {
-            return material->get_tau(det_F, F, C_inv);
+        get_tau(const SymmetricTensor<2, dim, NumberType> &C,
+                const NumberType &det_F,
+                const Tensor<2, dim, NumberType> &F) const {
+            return material->get_tau(C, det_F, F);
         }
 
         // And the tangent:
         SymmetricTensor<4, dim, NumberType>
-        get_Jc(const NumberType &det_F,
-               const SymmetricTensor<2, dim, NumberType> &C_inv,
+        get_Jc(const SymmetricTensor<2, dim, NumberType> &C,
+               const NumberType &det_F,
                const Tensor<2, dim, NumberType> &F) const {
-            return material->get_Jc(det_F, C_inv, F);
+            return material->get_Jc(C, det_F, F);
         }
 
         SymmetricTensor<4, dim, NumberType>
-        get_LagrangeElasticityTensor(const NumberType &det_F,
-                                     const SymmetricTensor<2, dim, NumberType> &C_inv,
+        get_LagrangeElasticityTensor(const SymmetricTensor<2, dim, NumberType> &C,
+                                     const NumberType &det_F,
                                      const Tensor<2, dim, NumberType> &F) const {
-            return material->get_LagrangeElasticityTensor(det_F, C_inv, F);
+            return material->get_LagrangeElasticityTensor(C, det_F, F);
         }
         // In terms of member functions, this class stores for the quadrature
         // point it represents a copy of a material type in case different
         // materials are used in different regions of the domain, as well as the
         // inverse of the deformation gradient...
     private:
-        std::shared_ptr<Material_Compressible_Neo_Hook_One_Field<dim, NumberType> > material;
+        std::shared_ptr<Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> > material;
     };
 
 
@@ -444,18 +433,7 @@ inline double degrees_to_radians(const double &degrees) {
 
     private:
 
-        // We start the collection of member functions with one that builds the
-        // grid:
-//        Triangulation<dim>
-//        make_dog_bone_geometry(const double &thickness,
-//                               const double &gauge_length,
-//                               const double &gauge_width,
-//                               const double &fillet_radius,
-//                               const double &clamp_width,
-//                               const double &clamp_length,
-//                               const int &n_refinements = 0,
-//                               const bool &output_all_triangulations = false,
-//                               const double &radius_multiplier = 1.25);
+
 
         void
         make_grid();
@@ -868,102 +846,6 @@ inline double degrees_to_radians(const double &degrees) {
         }
     }
 
-//    //Ernesto Kinsol:
-//        template<int dim, typename NumberType>
-//        unsigned int
-//        Solid<dim, NumberType>::solve_nonlinear_timestep_kinsol(BlockVector<double> &solution_delta) {
-
-//            std::cout << std::endl << "Timestep " << time.get_timestep() << " @ "
-//                      << time.current() << "s" << std::endl;
-
-//            double newton_iteration = 0;
-
-//            compute_and_factorize_jacobian(solution_n, newton_iteration);
-//            solve_linear_kinsol(system_rhs,solution_n);
-//            newton_iteration++;
-
-//            double target_tolerance = 1.0e-8;
-//            double step_tolerance = 1e-6;
-
-//            typename SUNDIALS::KINSOL<BlockVector<double>>::AdditionalData
-//                    additional_data;
-//            additional_data.function_tolerance = target_tolerance;
-//    //        additional_data.step_tolerance = step_tolerance;
-
-//            SUNDIALS::KINSOL<BlockVector<double>> nonlinear_solver(additional_data);
-
-//            nonlinear_solver.reinit_vector = [&](BlockVector<double> &x) {
-
-//                const types::global_dof_index n_dofs_u = dofs_per_block[u_dof];
-//                x.reinit (dofs_per_block);
-//                x.collect_sizes ();
-//            };
-
-
-//            nonlinear_solver.residual =
-
-//                    [&](const BlockVector<double> &evaluation_point_in,
-//                    BlockVector<double> & residual_vector_kinsol)
-//            {
-
-//                BlockVector<double> solution_delta_internal = evaluation_point_in;
-//                solution_delta_internal -= solution_n;
-
-//                assemble_system(solution_delta_internal, /*rhs_only*/ true);
-
-//                for (unsigned int i = 0; i < dof_handler_ref.n_dofs(); ++i)
-//                    if (!constraints.is_constrained(i))
-//                        residual_vector_kinsol(i) = -system_rhs(i);
-
-//                cout<<"res: "<<residual_vector_kinsol.l2_norm()<<endl;
-
-//                return 0;
-//            };
-
-//            nonlinear_solver.setup_jacobian =
-
-//                    [&](const BlockVector<double> &current_u,
-//                    const BlockVector<double> & /*current_f*/)
-//            {
-
-//                compute_and_factorize_jacobian(current_u, newton_iteration);
-//                newton_iteration++;
-
-//                return 0;
-//            };
-
-//            nonlinear_solver.solve_with_jacobian = [&](const BlockVector<double> &rhs,
-//                    BlockVector<double> &      dst,
-//                    const double tolerance)
-//            {
-//                this->solve_linear_kinsol(rhs, dst);
-
-//                return 0;
-//            };
-
-//            return nonlinear_solver.solve(solution_n);
-//        }
-
-//        template<int dim, typename NumberType>
-//        void
-//        Solid<dim, NumberType>::compute_and_factorize_jacobian(const BlockVector<double> &newton_update_in, const double newton_iteration)
-//        {
-//            make_constraints(newton_iteration);
-
-//            assemble_system(newton_update_in, /*rhs_only*/ false);
-//            jacobian_matrix_factorization = std::make_unique<SparseDirectUMFPACK>();
-//            jacobian_matrix_factorization->factorize(tangent_matrix);
-//        }
-
-//        template<int dim, typename NumberType>
-//        void
-//        Solid<dim, NumberType>::solve_linear_kinsol(const BlockVector<double> &rhs,
-//                                               BlockVector<double> &present_solution)
-//        {
-//          jacobian_matrix_factorization->vmult(present_solution, rhs);
-//          constraints.distribute(present_solution);
-//        }
-
 
 // @sect4{Solid::solve_nonlinear_timestep}
 
@@ -1205,7 +1087,7 @@ inline double degrees_to_radians(const double &degrees) {
         struct Local_ASM {
             const Solid<dim, NumberType> *solid;
             FullMatrix<double> cell_matrix;
-            Vector<double> cell_strain;
+//            Vector<double> cell_strain;
             Vector<double> cell_rhs;
             std::vector<types::global_dof_index> local_dof_indices;
             bool rhs_only;
@@ -1215,13 +1097,13 @@ inline double degrees_to_radians(const double &degrees) {
                     solid(solid),
                     cell_matrix(solid->dofs_per_cell, solid->dofs_per_cell),
                     cell_rhs(solid->dofs_per_cell),
-                    cell_strain(solid->dofs_per_cell),
+//                    cell_strain(solid->dofs_per_cell),
                     local_dof_indices(solid->dofs_per_cell),
                     rhs_only(rhs_only_in){}
 
             void reset() {
                 cell_matrix = 0.0;
-                cell_strain = 0.0;
+//                cell_strain = 0.0;
                 cell_rhs = 0.0;
 //                rhs_only = false;
             }
@@ -1460,11 +1342,9 @@ inline double degrees_to_radians(const double &degrees) {
             for (unsigned int q_point = 0; q_point < n_q_points; ++q_point) {
                 const Tensor<2, dim, NumberType> &grad_u = scratch.solution_grads_u_total[q_point];
                 const Tensor<2, dim, NumberType> F = Physics::Elasticity::Kinematics::F(grad_u);
-                const Tensor<2, dim, NumberType> F_T = transpose(F);
                 const NumberType det_F = determinant(F);
                 const SymmetricTensor<2, dim, NumberType> C = Physics::Elasticity::Kinematics::C(F);
                 const Tensor<2, dim, NumberType> F_inv = invert(F);
-                const SymmetricTensor<2, dim, NumberType> C_inv = invert(C);
                 Assert(det_F > NumberType(0.0), ExcInternalError());
                 for (unsigned int k = 0; k < dofs_per_cell; ++k) {
                     const unsigned int k_group = fe.system_to_base_index(k).first.first;
@@ -1475,8 +1355,8 @@ inline double degrees_to_radians(const double &degrees) {
                     } else Assert(k_group <= u_dof, ExcInternalError());
                 }
 
-                const SymmetricTensor<2, dim, NumberType> tau = lqph[q_point]->get_tau(det_F, F, C_inv);
-                const SymmetricTensor<4, dim, NumberType> Jc = lqph[q_point]->get_Jc(det_F, C_inv, F);
+                const SymmetricTensor<2, dim, NumberType> tau = lqph[q_point]->get_tau(C, det_F, F);
+                const SymmetricTensor<4, dim, NumberType> Jc = lqph[q_point]->get_Jc(C, det_F, F);
                 const Tensor<2, dim, NumberType> tau_ns(tau);
 
 
@@ -1617,8 +1497,6 @@ inline double degrees_to_radians(const double &degrees) {
             {
                 double time_end = time.end();
                 double delta_t = time.get_delta_t();
-                int number_of_steps = time_end / delta_t;
-
 
                 {
                     const int boundary_id = 1;
@@ -1769,4 +1647,4 @@ inline double degrees_to_radians(const double &degrees) {
 
 
 
-#endif // TENSILETEST_H
+#endif // COOKSMEMBRANE_H

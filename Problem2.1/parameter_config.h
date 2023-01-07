@@ -43,8 +43,9 @@ using namespace dealii;
 // The shear modulus $ \mu $ and Poisson ration $ \nu $ for the
 // neo-Hookean material.
     struct Materials {
-        double nu;
-        double mu;
+        double c0;
+        double c1;
+        double c2;
 
         static void
         declare_parameters(ParameterHandler &prm);

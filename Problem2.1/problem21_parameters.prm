@@ -39,11 +39,15 @@ end
 
 
 subsection Material properties
-  # Poisson's ratio
-  set Poisson's ratio = 0.3
+  # Constant 0
+  set Constant 0 = 1000.01e06
 
-  # Shear modulus
-  set Shear modulus   = 0.450e6
+  # Constant 1
+  set Constant 1  = 0.092e06
+
+  # Constant 2
+  set Constant 2 = 0.237e06
+
 end
 
 

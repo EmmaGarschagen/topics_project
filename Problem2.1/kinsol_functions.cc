@@ -1,6 +1,6 @@
 #include "cooks-membrane-sundials.h"
 
-namespace Tensile_Test {
+namespace Cooks_Membrane {
     using namespace dealii;
     using namespace std;
 
@@ -19,7 +19,7 @@ namespace Tensile_Test {
         newton_iteration++;
 
         double target_tolerance = 1.0e-8;
-        double step_tolerance = 1e-6;
+//        double step_tolerance = 1e-6;
 
         typename SUNDIALS::KINSOL<BlockVector<double>>::AdditionalData
                 additional_data;

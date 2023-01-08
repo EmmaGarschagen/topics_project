@@ -89,10 +89,72 @@ namespace Cooks_Membrane {
     using namespace std;
 
 
+    template<int dim, typename NumberType>
+    SymmetricTensor<4, dim, NumberType>
+    dif_tensor(SymmetricTensor<2, dim, NumberType> (*func)(SymmetricTensor<2, dim, NumberType>),
+               const SymmetricTensor<2, dim, NumberType> &val,
+               const NumberType &eps = 1e-6) {
+        SymmetricTensor<2, dim, NumberType> val_hat, func_val, tmp_grad;
+        SymmetricTensor<4, dim, NumberType> out;
 
-inline double degrees_to_radians(const double &degrees) {
-    return degrees * (M_PI / 180.0);
-}
+        func_val = func(val);
+
+        for (int i = 0; i < dim; ++i) {
+            for (int j = 0; j < dim; ++j) {
+                val_hat = val;
+                val_hat[i][j] += eps;
+                tmp_grad = (func(val_hat) - func_val) / eps;
+
+                for (int k = 0; k < dim; ++k)
+                    for (int l = 0; l < dim; ++l)
+                        out[i][j][k][l] = tmp_grad[k][l];
+
+            }
+        }
+        return out;
+    }
+
+    template<int dim, typename NumberType>
+    void pprint(const SymmetricTensor<2, dim, NumberType> &val) {
+        for (int i = 0; i < dim; ++i) {
+            for (int j = 0; j < dim; ++j) {
+                cout << "\t" << val[i][j];
+            }
+            cout << endl;
+        }
+    }
+
+    template<int dim, typename NumberType>
+    void pprint(const SymmetricTensor<4, dim, NumberType> &val) {
+        typedef pair<unsigned int, unsigned int> i_pair;
+        vector<i_pair> voigt;
+
+        if (dim == 3)
+            voigt = vector<i_pair>({i_pair(0, 0),
+                                    i_pair(1, 1),
+                                    i_pair(2, 2),
+                                    i_pair(0, 1),
+                                    i_pair(0, 2),
+                                    i_pair(1, 2)});
+        else if (dim == 2)
+            voigt = vector<i_pair>({i_pair(0, 0),
+                                    i_pair(1, 1),
+                                    i_pair(0, 1)});
+        else
+            throw StandardExceptions::ExcNotImplemented("WTF?");
+
+
+        for (const auto &row: voigt) {
+            for (const auto &col: voigt)
+                cout << "\t" << val[row.first][row.second][col.first][col.second];
+        cout << endl;
+        }
+    }
+
+
+    inline double degrees_to_radians(const double &degrees) {
+        return degrees * (M_PI / 180.0);
+    }
 
 
 
@@ -107,8 +169,8 @@ inline double degrees_to_radians(const double &degrees) {
                 :
                 c0(parameters.c0),
                 c1(parameters.c1),
-                c2(parameters.c2)
-                 {}
+                c2(parameters.c2) {}
+
 
         ~Material_Compressible_Mooney_Rivlin_One_Field() {}
 
@@ -143,8 +205,6 @@ inline double degrees_to_radians(const double &degrees) {
         }
 
 
-
-
         SymmetricTensor<2, dim, NumberType>
         get_SecondPiolaStress(const Tensor<2, dim, NumberType> &F) {
             const NumberType det_F = determinant(F);
@@ -153,6 +213,7 @@ inline double degrees_to_radians(const double &degrees) {
             return this->get_SecondPiolaStress(C, det_F);
 
         }
+
 
         SymmetricTensor<4, dim, NumberType>
         get_Jc(const SymmetricTensor<2, dim, NumberType> &C,
@@ -165,22 +226,26 @@ inline double degrees_to_radians(const double &degrees) {
         const double c0;
         const double c1;
         const double c2;
-        const double d = 2*(c1 + 2*c2);
-//        const double d = 0;
+        const double d = 2 * (c1 + 2 * c2);
 
         SymmetricTensor<2, dim, NumberType>
         get_SecondPiolaStress(const SymmetricTensor<2, dim, NumberType> &C,
-                              const NumberType &det_F) {
-            return 2 * (c1 + c2 * trace(C)) * unit_symmetric_tensor<dim>() - 2 * c2 * C + (2*c0*det_F*(det_F-1) - d)*invert(C);
+                              const NumberType &det_F) const {
+            return 2 * (c1 + c2 * trace(C)) * unit_symmetric_tensor<dim>() - 2 * c2 * C +
+                   (2 * c0 * det_F * (det_F - 1) - d) * invert(C);
         }
+
 
         SymmetricTensor<4, dim, NumberType>
         get_LagrangeElasticityTensor(const SymmetricTensor<2, dim, NumberType> &C,
                                      const NumberType &det_F,
                                      const Tensor<2, dim, NumberType> &F) const {
             const SymmetricTensor<2, dim, NumberType> C_inv = invert(C);
-            return 4*c2*Physics::Elasticity::StandardTensors< dim >::IxI + 2*c0*det_F*(2*det_F-1)*outer_product(C_inv, C_inv)
-            -  2*(2*c0*det_F*(det_F-1) - d)*Physics::Elasticity::StandardTensors< dim >::dC_inv_dC(F) - 4*c2* Physics::Elasticity::StandardTensors< dim >::S;
+
+            return 4 * c2 * Physics::Elasticity::StandardTensors<dim>::IxI +
+                   2 * c0 * det_F * (2 * det_F - 1) * outer_product(C_inv, C_inv) +
+                   2 * (2 * c0 * det_F * (det_F - 1) - d) * Physics::Elasticity::StandardTensors<dim>::dC_inv_dC(F) -
+                   4 * c2 * Physics::Elasticity::StandardTensors<dim>::S;
         }
 
     };
@@ -434,7 +499,6 @@ inline double degrees_to_radians(const double &degrees) {
     private:
 
 
-
         void
         make_grid();
 
@@ -484,7 +548,6 @@ inline double degrees_to_radians(const double &degrees) {
         void
         solve_linear_kinsol(const BlockVector<double> &rhs,
                             BlockVector<double> &present_solution);
-
 
 
         std::pair<unsigned int, double>
@@ -608,7 +671,6 @@ inline double degrees_to_radians(const double &degrees) {
         print_vertical_tip_displacement();
 
 
-
     };
 
 // @sect3{Implementation of the <code>Solid</code> class}
@@ -638,9 +700,7 @@ inline double degrees_to_radians(const double &degrees) {
             qf_cell(parameters.quad_order),
             qf_face(parameters.quad_order),
             n_q_points(qf_cell.size()),
-            n_q_points_f(qf_face.size())
-    { }
-
+            n_q_points_f(qf_face.size()) {}
 
 
     // The class destructor simply clears the data held by the DOFHandler
@@ -692,16 +752,15 @@ inline double degrees_to_radians(const double &degrees) {
 
 // @sect4{Solid::grid_y_transfrom}
 
-    template <int dim>
-    Point<dim> grid_y_transform (const Point<dim> &pt_in)
-    {
+    template<int dim>
+    Point<dim> grid_y_transform(const Point<dim> &pt_in) {
         const double &x = pt_in[0];
         const double &y = pt_in[1];
 
-        const double y_upper = 44.0 + (16.0/48.0)*x; // Line defining upper edge of beam
-        const double y_lower =  0.0 + (44.0/48.0)*x; // Line defining lower edge of beam
-        const double theta = y/44.0; // Fraction of height along left side of beam
-        const double y_transform = (1-theta)*y_lower + theta*y_upper; // Final transformation
+        const double y_upper = 44.0 + (16.0 / 48.0) * x; // Line defining upper edge of beam
+        const double y_lower = 0.0 + (44.0 / 48.0) * x; // Line defining lower edge of beam
+        const double theta = y / 44.0; // Fraction of height along left side of beam
+        const double y_transform = (1 - theta) * y_lower + theta * y_upper; // Final transformation
 
         Point<dim> pt_out = pt_in;
         pt_out[1] = y_transform;
@@ -713,10 +772,10 @@ inline double degrees_to_radians(const double &degrees) {
 
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::make_grid() {
-        std::cout << "Polynomial degree: Q"<<parameters.poly_degree<<std::endl;
-        std::vector< unsigned int > repetitions(dim, parameters.elements_per_edge);
+        std::cout << "Polynomial degree: Q" << parameters.poly_degree << std::endl;
+        std::vector<unsigned int> repetitions(dim, parameters.elements_per_edge);
         if (dim == 3)
-            repetitions[dim-1] = 1;
+            repetitions[dim - 1] = 1;
 
         const Point<dim> bottom_left = (dim == 3 ? Point<dim>(0.0, 0.0, -0.5) : Point<dim>(0.0, 0.0));
         const Point<dim> top_right = (dim == 3 ? Point<dim>(48.0, 44.0, 0.5) : Point<dim>(48.0, 44.0));
@@ -732,8 +791,7 @@ inline double degrees_to_radians(const double &degrees) {
         for (; cell != endc; ++cell)
             for (unsigned int face = 0;
                  face < GeometryInfo<dim>::faces_per_cell; ++face)
-                if (cell->face(face)->at_boundary() == true)
-                {
+                if (cell->face(face)->at_boundary() == true) {
                     if (std::abs(cell->face(face)->center()[0] - 0.0) < tol_boundary)
                         cell->face(face)->set_boundary_id(1); // -X faces
                     else if (std::abs(cell->face(face)->center()[0] - 48.0) < tol_boundary)
@@ -986,36 +1044,36 @@ inline double degrees_to_radians(const double &degrees) {
     }
 
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::print_vertical_tip_displacement(){
+    void Solid<dim, NumberType>::print_vertical_tip_displacement() {
         static const unsigned int l_width = 87;
 
         for (unsigned int i = 0; i < l_width; ++i)
             std::cout << "_";
-        std::cout <<std::endl;
-        const Point<dim> soln_pt = (dim == 3?
-                                    Point<dim>(48.0*parameters.scale, 52.0*parameters.scale, 0.5*parameters.scale):
-                                    Point<dim>(48.0*parameters.scale, 52.0*parameters.scale));
+        std::cout << std::endl;
+        const Point<dim> soln_pt = (dim == 3 ?
+                                    Point<dim>(48.0 * parameters.scale, 52.0 * parameters.scale, 0.5 * parameters.scale)
+                                             :
+                                    Point<dim>(48.0 * parameters.scale, 52.0 * parameters.scale));
         double vertical_tip_displacement = 0.0;
         double vertical_tip_displacement_check = 0.0;
 
         typename DoFHandler<dim>::active_cell_iterator cell =
                 dof_handler_ref.begin_active(), endc = dof_handler_ref.end();
-        for (; cell != endc; ++cell){
-            for (unsigned int v=0; v<GeometryInfo<dim>::vertices_per_cell; ++v)
-                if (cell->vertex(v).distance(soln_pt) < 1e-6)
-                {
-                    vertical_tip_displacement = solution_n(cell->vertex_dof_index(v,u_dof+1));
+        for (; cell != endc; ++cell) {
+            for (unsigned int v = 0; v < GeometryInfo<dim>::vertices_per_cell; ++v)
+                if (cell->vertex(v).distance(soln_pt) < 1e-6) {
+                    vertical_tip_displacement = solution_n(cell->vertex_dof_index(v, u_dof + 1));
 
-                    const MappingQ<dim> mapping (parameters.poly_degree);
+                    const MappingQ<dim> mapping(parameters.poly_degree);
                     const Point<dim> qp_unit = mapping.transform_real_to_unit_cell(cell, soln_pt);
-                    const Quadrature<dim> soln_qrule (qp_unit);
+                    const Quadrature<dim> soln_qrule(qp_unit);
                     AssertThrow(soln_qrule.size() == 1, ExcInternalError());
-                    FEValues<dim> fe_values_soln (fe, soln_qrule, update_values);
+                    FEValues<dim> fe_values_soln(fe, soln_qrule, update_values);
                     fe_values_soln.reinit(cell);
-                    std::vector<Tensor<1, dim>> soln_values (soln_qrule.size());
+                    std::vector<Tensor<1, dim>> soln_values(soln_qrule.size());
                     fe_values_soln[u_fe].get_function_values(solution_n,
                                                              soln_values);
-                    vertical_tip_displacement_check = soln_values[0][u_dof+1];
+                    vertical_tip_displacement_check = soln_values[0][u_dof + 1];
                     break;
                 }
         }
@@ -1099,7 +1157,7 @@ inline double degrees_to_radians(const double &degrees) {
                     cell_rhs(solid->dofs_per_cell),
 //                    cell_strain(solid->dofs_per_cell),
                     local_dof_indices(solid->dofs_per_cell),
-                    rhs_only(rhs_only_in){}
+                    rhs_only(rhs_only_in) {}
 
             void reset() {
                 cell_matrix = 0.0;
@@ -1122,7 +1180,7 @@ inline double degrees_to_radians(const double &degrees) {
 
             std::vector<std::vector<Tensor<2, dim, NumberType> > > grad_Nx;
             std::vector<std::vector<SymmetricTensor<2, dim, NumberType> > >
-            symm_grad_Nx;
+                    symm_grad_Nx;
 
             bool rhs_only;
 
@@ -1142,9 +1200,8 @@ inline double degrees_to_radians(const double &degrees) {
                             std::vector<Tensor<2, dim, NumberType> >(fe_cell.dofs_per_cell)),
                     symm_grad_Nx(qf_cell.size(),
                                  std::vector<SymmetricTensor<2, dim, NumberType> >
-                                 (fe_cell.dofs_per_cell)),
-                  rhs_only(rhs_only_in)
-            {}
+                                         (fe_cell.dofs_per_cell)),
+                    rhs_only(rhs_only_in) {}
 
             ScratchData_ASM(const ScratchData_ASM &rhs)
                     :
@@ -1202,15 +1259,14 @@ inline double degrees_to_radians(const double &degrees) {
             BlockSparseMatrix<double> &tangent_matrix = const_cast<Solid<dim, NumberType> *>(data.solid)->tangent_matrix;
             BlockVector<double> &system_rhs = const_cast<Solid<dim, NumberType> *>(data.solid)->system_rhs;
 
-            if(data.rhs_only == false){
-            constraints.distribute_local_to_global(
-                    data.cell_matrix, data.cell_rhs,
-                    data.local_dof_indices,
-                    tangent_matrix, system_rhs);
+            if (data.rhs_only == false) {
+                constraints.distribute_local_to_global(
+                        data.cell_matrix, data.cell_rhs,
+                        data.local_dof_indices,
+                        tangent_matrix, system_rhs);
 
 
-            }
-            else{
+            } else {
                 constraints.distribute_local_to_global(
                         data.cell_rhs,
                         data.local_dof_indices,
@@ -1268,7 +1324,7 @@ inline double degrees_to_radians(const double &degrees) {
 
 
                         const double time_ramp = (time.current() / time.end());
-                        const double magnitude = (1.0/(16.0*parameters.scale*1.0*parameters.scale))*time_ramp;
+                        const double magnitude = (0.1 / (16.0 * parameters.scale * 1.0 * parameters.scale)) * time_ramp;
                         Tensor<1, dim> dir;
                         dir[1] = 1.0;
                         const Tensor<1, dim> traction = magnitude * dir;
@@ -1375,37 +1431,37 @@ inline double degrees_to_radians(const double &degrees) {
                     else Assert(i_group <= u_dof, ExcInternalError());
 
                     // matrix only calcs
-                    if(data.rhs_only == false){
-                    for (unsigned int j = 0; j <= i; ++j) {
-                        const unsigned int component_j = fe.system_to_component_index(j).first;
-                        const unsigned int j_group = fe.system_to_base_index(j).first.first;
-                        // This is the $\mathsf{\mathbf{k}}_{\mathbf{u} \mathbf{u}}$
-                        // contribution. It comprises a material contribution, and a
-                        // geometrical stress contribution which is only added along
-                        // the local matrix diagonals:
-                        if ((i_group == j_group) && (i_group == u_dof)) {
-                            data.cell_matrix(i, j) += symm_grad_Nx[i] * Jc
-                                                      * symm_grad_Nx[j] * JxW;// The material contribution:
-                            if (component_i == component_j) // geometrical stress contribution
-                                data.cell_matrix(i, j) += grad_Nx[i][component_i] * tau_ns
-                                                          * grad_Nx[j][component_j] * JxW;
-                        } else Assert((i_group <= u_dof) && (j_group <= u_dof),
-                                      ExcInternalError());
+                    if (data.rhs_only == false) {
+                        for (unsigned int j = 0; j <= i; ++j) {
+                            const unsigned int component_j = fe.system_to_component_index(j).first;
+                            const unsigned int j_group = fe.system_to_base_index(j).first.first;
+                            // This is the $\mathsf{\mathbf{k}}_{\mathbf{u} \mathbf{u}}$
+                            // contribution. It comprises a material contribution, and a
+                            // geometrical stress contribution which is only added along
+                            // the local matrix diagonals:
+                            if ((i_group == j_group) && (i_group == u_dof)) {
+                                data.cell_matrix(i, j) += symm_grad_Nx[i] * Jc
+                                                          * symm_grad_Nx[j] * JxW;// The material contribution:
+                                if (component_i == component_j) // geometrical stress contribution
+                                    data.cell_matrix(i, j) += grad_Nx[i][component_i] * tau_ns
+                                                              * grad_Nx[j][component_j] * JxW;
+                            } else Assert((i_group <= u_dof) && (j_group <= u_dof),
+                                          ExcInternalError());
+                        }
                     }
-}
                 }
             }
 
 
             // Finally, we need to copy the lower half of the local matrix into the
             // upper half:
-            if(data.rhs_only == false){
-            for (unsigned int i = 0; i < dofs_per_cell; ++i)
-                for (unsigned int j = i + 1; j < dofs_per_cell; ++j) {
-                    data.cell_matrix(i, j) = data.cell_matrix(j, i);
-                }
+            if (data.rhs_only == false) {
+                for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                    for (unsigned int j = i + 1; j < dofs_per_cell; ++j) {
+                        data.cell_matrix(i, j) = data.cell_matrix(j, i);
+                    }
+            }
         }
-}
     };
 
 
@@ -1417,13 +1473,10 @@ inline double degrees_to_radians(const double &degrees) {
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::assemble_system(const BlockVector<double> &solution_delta, const bool rhs_only) {
         timer.enter_subsection("Assemble linear system");
-        if(rhs_only == false)
-        {
+        if (rhs_only == false) {
             std::cout << " ASM_T " << std::flush;
             tangent_matrix = 0.0;
-        }
-        else
-        {
+        } else {
             std::cout << " ASM_R " << std::flush;
         }
 
@@ -1507,8 +1560,7 @@ inline double degrees_to_radians(const double &degrees) {
                                                              fe.component_mask(u_fe));
                 }
 
-                if (dim == 3)
-                {
+                if (dim == 3) {
                     const int boundary_id = 2;
                     const FEValuesExtractors::Scalar z_displacement(2);
                     VectorTools::interpolate_boundary_values(dof_handler_ref,
@@ -1612,7 +1664,7 @@ inline double degrees_to_radians(const double &degrees) {
     void Solid<dim, NumberType>::output_results() const {
         DataOut<dim> data_out;
         std::vector<DataComponentInterpretation::DataComponentInterpretation>
-                data_component_interpretation(dim,DataComponentInterpretation::component_is_part_of_vector);
+                data_component_interpretation(dim, DataComponentInterpretation::component_is_part_of_vector);
 
         std::vector<std::string> solution_name(dim, "Displacement");
 
@@ -1636,15 +1688,14 @@ inline double degrees_to_radians(const double &degrees) {
         std::ostringstream filename;
         string file;
 
-        file = "Q"+to_string(parameters.poly_degree)+"cooks-membrane_solution-" + to_string(time.get_timestep()) + ".vtu";
+        file = "Q" + to_string(parameters.poly_degree) + "cooks-membrane_solution-" + to_string(time.get_timestep()) +
+               ".vtu";
 
         std::ofstream output(file.c_str());
         data_out.write_vtu(output);
 
     }
 }
-
-
 
 
 #endif // COOKSMEMBRANE_H

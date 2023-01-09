@@ -45,6 +45,7 @@ namespace Cooks_Membrane {
             solution_delta_internal -= solution_n;
 
             assemble_system(solution_delta_internal, /*rhs_only*/ true);
+            constraints.condense(system_rhs);
 
             for (unsigned int i = 0; i < dof_handler_ref.n_dofs(); ++i)
                 if (!constraints.is_constrained(i))
@@ -89,6 +90,7 @@ namespace Cooks_Membrane {
         solution_delta_internal -= solution_n;
 
         assemble_system(solution_delta_internal, /*rhs_only*/ false); //newton_update_in
+        constraints.condense(tangent_matrix, system_rhs);
         jacobian_matrix_factorization = std::make_unique<SparseDirectUMFPACK>();
         jacobian_matrix_factorization->factorize(tangent_matrix);
     }
@@ -103,5 +105,4 @@ namespace Cooks_Membrane {
     }
 
     template class Solid<3, double>;
-//    template class Solid<2, double>;
 }

@@ -15,7 +15,7 @@ end
 
 subsection Geometry
     # Elements per edge
-    set Elements per edge = 32
+    set Elements per edge = 16
     # Grid scale
     set Grid scale = 1e-3
 end

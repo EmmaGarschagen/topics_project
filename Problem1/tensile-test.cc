@@ -403,8 +403,7 @@ namespace Tensile_Test {
     template<int dim, typename NumberType>
     class Material_Compressible_Neo_Hook_One_Field {
     public:
-        Material_Compressible_Neo_Hook_One_Field(const double mu,
-                                                 const double nu)
+        Material_Compressible_Neo_Hook_One_Field(const double mu, const double nu)
                 :
                 c_1(mu / 2.0),
                 beta((nu) / (1 - 2 * nu)) {}
@@ -676,7 +675,7 @@ namespace Tensile_Test {
         SymmetricTensor<2, dim, NumberType>
         get_SecondPiolaStress(const NumberType &det_F,
                               const Tensor<2, dim, NumberType> &C_inv) const {
-            return material->get_SecondPiolaStress(det_F, C_inv);
+            return material->get_SecondPiolaStress(C_inv, det_F);
         }
 
         SymmetricTensor<2, dim, NumberType>

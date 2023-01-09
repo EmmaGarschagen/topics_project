@@ -32,6 +32,7 @@
 #include <deal.II/grid/grid_out.h>
 #include <deal.II/grid/tria_iterator.h>
 #include <deal.II/grid/tria_accessor.h>
+#include <deal.II/grid/grid_refinement.h>
 
 #include <deal.II/fe/fe_dgp_monomial.h>
 #include <deal.II/fe/fe_q.h>
@@ -53,6 +54,8 @@
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/vector_tools.h>
+#include <deal.II/numerics/error_estimator.h>
+#include <deal.II/numerics/solution_transfer.h>
 
 #include <deal.II/base/config.h>
 
@@ -87,70 +90,6 @@ namespace Cooks_Membrane {
     using namespace Physics::Transformations;
     using namespace Physics::Elasticity;
     using namespace std;
-
-
-    template<int dim, typename NumberType>
-    SymmetricTensor<4, dim, NumberType>
-    dif_tensor(SymmetricTensor<2, dim, NumberType> (*func)(SymmetricTensor<2, dim, NumberType>),
-               const SymmetricTensor<2, dim, NumberType> &val,
-               const NumberType &eps = 1e-6) {
-        SymmetricTensor<2, dim, NumberType> val_hat, func_val, tmp_grad;
-        SymmetricTensor<4, dim, NumberType> out;
-
-        func_val = func(val);
-
-        for (int i = 0; i < dim; ++i) {
-            for (int j = 0; j < dim; ++j) {
-                val_hat = val;
-                val_hat[i][j] += eps;
-                tmp_grad = (func(val_hat) - func_val) / eps;
-
-                for (int k = 0; k < dim; ++k)
-                    for (int l = 0; l < dim; ++l)
-                        out[i][j][k][l] = tmp_grad[k][l];
-
-            }
-        }
-        return out;
-    }
-
-    template<int dim, typename NumberType>
-    void pprint(const SymmetricTensor<2, dim, NumberType> &val) {
-        for (int i = 0; i < dim; ++i) {
-            for (int j = 0; j < dim; ++j) {
-                cout << "\t" << val[i][j];
-            }
-            cout << endl;
-        }
-    }
-
-    template<int dim, typename NumberType>
-    void pprint(const SymmetricTensor<4, dim, NumberType> &val) {
-        typedef pair<unsigned int, unsigned int> i_pair;
-        vector<i_pair> voigt;
-
-        if (dim == 3)
-            voigt = vector<i_pair>({i_pair(0, 0),
-                                    i_pair(1, 1),
-                                    i_pair(2, 2),
-                                    i_pair(0, 1),
-                                    i_pair(0, 2),
-                                    i_pair(1, 2)});
-        else if (dim == 2)
-            voigt = vector<i_pair>({i_pair(0, 0),
-                                    i_pair(1, 1),
-                                    i_pair(0, 1)});
-        else
-            throw StandardExceptions::ExcNotImplemented("WTF?");
-
-
-        for (const auto &row: voigt) {
-            for (const auto &col: voigt)
-                cout << "\t" << val[row.first][row.second][col.first][col.second];
-        cout << endl;
-        }
-    }
-
 
     inline double degrees_to_radians(const double &degrees) {
         return degrees * (M_PI / 180.0);
@@ -504,7 +443,7 @@ namespace Cooks_Membrane {
 
         // Set up the finite element system to be solved:
         void
-        system_setup();
+        system_setup(const bool initial_step);
 
         // Several functions to assemble the system and right hand side matrices
         // using multithreading. Each of them comes as a wrapper function, one
@@ -558,7 +497,10 @@ namespace Cooks_Membrane {
         get_total_solution(const BlockVector<double> &solution_delta) const;
 
         void
-        output_results() const;
+        refine_mesh();
+
+        void
+        output_results(unsigned int refinement_cycle) const;
 
         // Finally, some member variables that describe the current state: A
         // collection of the parameters used to describe the problem setup...
@@ -668,7 +610,7 @@ namespace Cooks_Membrane {
         print_conv_footer();
 
         void
-        print_vertical_tip_displacement();
+        print_vertical_tip_displacement(unsigned int refinement_cycle);
 
 
     };
@@ -717,8 +659,7 @@ namespace Cooks_Membrane {
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::run() {
         make_grid();
-        system_setup();
-        output_results();
+        system_setup(true);
         time.increment();
 
         // We then declare the incremental solution update $\varDelta
@@ -726,23 +667,35 @@ namespace Cooks_Membrane {
         // time domain.
         //
         // At the beginning, we reset the solution update for this time step...
-        BlockVector<double> solution_delta(dofs_per_block);
-        while (time.current() <= time.end()) {
-            solution_delta = 0.0;
+        for (unsigned int refinement_cycle = 0; refinement_cycle < 3;
+             ++refinement_cycle)
+        {
+            std::cout << "Refinement cycle " << refinement_cycle << std::endl;
 
-            // ...solve the current time step and update total solution vector
-            // $\mathbf{\Xi}_{\textrm{n}} = \mathbf{\Xi}_{\textrm{n-1}} +
-            // \varDelta \mathbf{\Xi}$...
+            if (refinement_cycle > 0)
+                refine_mesh();
+
+            BlockVector<double> solution_delta(dofs_per_block);
+            while (time.current() <= time.end()) {
+
+                solution_delta = 0.0;
+
+                // ...solve the current time step and update total solution vector
+                // $\mathbf{\Xi}_{\textrm{n}} = \mathbf{\Xi}_{\textrm{n-1}} +
+                // \varDelta \mathbf{\Xi}$...
 //            solve_nonlinear_timestep(solution_delta);
-            solve_nonlinear_timestep_kinsol(solution_delta);
-            solution_n += solution_delta;
+                solve_nonlinear_timestep_kinsol(solution_delta);
+                solution_n += solution_delta;
 
-            // ...and plot the results before moving on happily to the next time
-            // step:
-            output_results();
-            time.increment();
+                // ...and plot the results before moving on happily to the next time
+                // step:
+                output_results(refinement_cycle);
+                time.increment();
+            }
+            print_vertical_tip_displacement(refinement_cycle);
+            timer.reset();
+            time.reset();
         }
-        print_vertical_tip_displacement();
 
     }
 
@@ -817,22 +770,65 @@ namespace Cooks_Membrane {
 // of components per block. Since the displacement is a vector component, the
 // first dim components belong to it.
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::system_setup() {
+    void Solid<dim, NumberType>::system_setup(const bool initial_step) {
         timer.enter_subsection("Setup system");
-
         std::vector<unsigned int> block_component(n_components, u_dof); // Displacement
 
-        // The DOF handler is then initialised and we renumber the grid in an
-        // efficient manner. We also record the number of DOFs per block.
-        dof_handler_ref.distribute_dofs(fe);
-        DoFRenumbering::Cuthill_McKee(dof_handler_ref);
-        DoFRenumbering::component_wise(dof_handler_ref, block_component);
-        dofs_per_block = DoFTools::count_dofs_per_fe_block(dof_handler_ref, block_component);
+        if (initial_step) {
+
+            // The DOF handler is then initialised and we renumber the grid in an
+            // efficient manner. We also record the number of DOFs per block.
+
+            dof_handler_ref.distribute_dofs(fe);
+            solution_n.reinit(dofs_per_block);
+            solution_n.collect_sizes();
+            DoFRenumbering::Cuthill_McKee(dof_handler_ref);
+            DoFRenumbering::component_wise(dof_handler_ref, block_component);
+            dofs_per_block = DoFTools::count_dofs_per_fe_block(dof_handler_ref, block_component);
+        }
+
+
+            constraints.clear();
+            DoFTools::make_hanging_node_constraints(dof_handler_ref,
+                                                    constraints);
+
+            {
+                const int boundary_id = 1;
+                VectorTools::interpolate_boundary_values(dof_handler_ref,
+                                                         boundary_id,
+                                                         Functions::ZeroFunction<dim>(n_components),
+                                                         constraints,
+                                                         fe.component_mask(u_fe));
+            }
+
+            if (dim == 3) {
+                const int boundary_id = 2;
+                const FEValuesExtractors::Scalar z_displacement(2);
+                VectorTools::interpolate_boundary_values(dof_handler_ref,
+                                                         boundary_id,
+                                                         Functions::ZeroFunction<dim>(n_components),
+                                                         constraints,
+                                                         fe.component_mask(z_displacement));
+            }
+            else {
+                if (constraints.has_inhomogeneities()) {
+                    AffineConstraints<double> homogeneous_constraints(constraints);
+                    for (unsigned int dof = 0; dof != dof_handler_ref.n_dofs(); ++dof)
+                        if (homogeneous_constraints.is_inhomogeneously_constrained(dof))
+                            homogeneous_constraints.set_inhomogeneity(dof, 0.0);
+                    constraints.clear();
+                    constraints.copy_from(homogeneous_constraints);
+
+        }}
+            constraints.close();
+
+
 
         std::cout << "Triangulation:"
                   << "\n\t Number of active cells: " << triangulation.n_active_cells()
                   << "\n\t Number of degrees of freedom: " << dof_handler_ref.n_dofs()
                   << std::endl;
+
 
         // Set up the sparsity pattern and tangent matrix
         tangent_matrix.clear();
@@ -856,6 +852,7 @@ namespace Cooks_Membrane {
                                             csp,
                                             constraints,
                                             false);
+//            constraints.condense(csp);
             sparsity_pattern.copy_from(csp);
         }
 
@@ -870,6 +867,7 @@ namespace Cooks_Membrane {
 
         // ...and finally set up the quadrature
         // point history:
+
         setup_qph();
 
         timer.leave_subsection();
@@ -898,7 +896,6 @@ namespace Cooks_Membrane {
             const std::vector<std::shared_ptr<PointHistory<dim, NumberType> > > lqph =
                     quadrature_point_history.get_data(cell);
             Assert(lqph.size() == n_q_points, ExcInternalError());
-
             for (unsigned int q_point = 0; q_point < n_q_points; ++q_point)
                 lqph[q_point]->setup_lqp(parameters);
         }
@@ -946,9 +943,11 @@ namespace Cooks_Membrane {
             // If we have decided that we want to continue with the iteration, we
             // assemble the tangent, make and impose the Dirichlet constraints,
             // and do the solve of the linearized system:
-            make_constraints(newton_iteration);
-            assemble_system(solution_delta, /*rhs_only*/ false);
+            constraints.distribute(solution_n);
+//            make_constraints(newton_iteration);
 
+            assemble_system(solution_delta, /*rhs_only*/ false);
+//            constraints.condense(tangent_matrix, system_rhs);
             get_error_residual(error_residual);
 
             if (newton_iteration == 0)
@@ -1044,7 +1043,7 @@ namespace Cooks_Membrane {
     }
 
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::print_vertical_tip_displacement() {
+    void Solid<dim, NumberType>::print_vertical_tip_displacement(unsigned int refinement_cycle) {
         static const unsigned int l_width = 87;
 
         for (unsigned int i = 0; i < l_width; ++i)
@@ -1079,7 +1078,7 @@ namespace Cooks_Membrane {
         }
         AssertThrow(vertical_tip_displacement > 0.0, ExcMessage("Found no cell with point inside!"))
         std::cout << "Vertical tip displacement: " << vertical_tip_displacement
-                  << "\t Check: " << vertical_tip_displacement_check << std::endl;
+                  << "\t Check: " << vertical_tip_displacement_check <<  "\t R-cycle: " << refinement_cycle << std::endl;
     }
 
 
@@ -1145,7 +1144,6 @@ namespace Cooks_Membrane {
         struct Local_ASM {
             const Solid<dim, NumberType> *solid;
             FullMatrix<double> cell_matrix;
-//            Vector<double> cell_strain;
             Vector<double> cell_rhs;
             std::vector<types::global_dof_index> local_dof_indices;
             bool rhs_only;
@@ -1155,13 +1153,11 @@ namespace Cooks_Membrane {
                     solid(solid),
                     cell_matrix(solid->dofs_per_cell, solid->dofs_per_cell),
                     cell_rhs(solid->dofs_per_cell),
-//                    cell_strain(solid->dofs_per_cell),
                     local_dof_indices(solid->dofs_per_cell),
                     rhs_only(rhs_only_in) {}
 
             void reset() {
                 cell_matrix = 0.0;
-//                cell_strain = 0.0;
                 cell_rhs = 0.0;
 //                rhs_only = false;
             }
@@ -1519,37 +1515,17 @@ namespace Cooks_Membrane {
     void Solid<dim, NumberType>::make_constraints(const int &it_nr) {
         std::cout << " CST " << std::flush;
 
-        // Since the constraints are different at different Newton iterations, we
-        // need to clear the constraints matrix and completely rebuild
-        // it. However, after the first iteration, the constraints remain the same
-        // and we can simply skip the rebuilding step if we do not clear it.
+
         if (it_nr > 1)
             return;
         const bool apply_dirichlet_bc = (it_nr == 0);
 
-        // The boundary conditions for the indentation problem are as follows: On
-        // the -x face (ID = 1), we set up a zero-displacement condition, -y and +y traction
-        // free boundary condition (don't need to take care); -z and +z faces (ID = 2) are
-        // not allowed to move along z axis so that it is a plane strain problem.
-        // Finally, as described earlier, +x face (ID = 11) has an the applied
-        // distributed shear force (converted by total force per unit area) which
-        // needs to be taken care as an inhomogeneous Neumann boundary condition.
-        //
-        // In the following, we will have to tell the function interpolation
-        // boundary values which components of the solution vector should be
-        // constrained (i.e., whether it's the x-, y-, z-displacements or
-        // combinations thereof). This is done using ComponentMask objects (see
-        // @ref GlossComponentMask) which we can get from the finite element if we
-        // provide it with an extractor object for the component we wish to
-        // select. To this end we first set up such extractor objects and later
-        // use it when generating the relevant component masks:
         if (apply_dirichlet_bc) {
-            constraints.clear();
-
 
             {
-                double time_end = time.end();
-                double delta_t = time.get_delta_t();
+                constraints.clear();
+                DoFTools::make_hanging_node_constraints(dof_handler_ref, constraints);
+
 
                 {
                     const int boundary_id = 1;
@@ -1575,7 +1551,8 @@ namespace Cooks_Membrane {
             // Zero Z-displacement through thickness direction
             // This corresponds to a plane stress condition being imposed on the beam
 
-        } else {
+        }
+        else {
             if (constraints.has_inhomogeneities()) {
                 AffineConstraints<double> homogeneous_constraints(constraints);
                 for (unsigned int dof = 0; dof != dof_handler_ref.n_dofs(); ++dof)
@@ -1586,7 +1563,10 @@ namespace Cooks_Membrane {
             }
         }
 
+
         constraints.close();
+//        constraints.distribute(solution_n);
+
     }
 
 // @sect4{Solid::solve_linear_system}
@@ -1656,12 +1636,65 @@ namespace Cooks_Membrane {
         return std::make_pair(lin_it, lin_res);
     }
 
+// @sect4{Solid::refine_mesh}
+    template <int dim, typename NumberType>
+    void Solid<dim, NumberType>::refine_mesh(){
+        Vector<float> estimated_error_per_cell(triangulation.n_active_cells());
+
+        KellyErrorEstimator<dim>::estimate(dof_handler_ref,
+                                           QGauss<dim-1>(fe.degree+1),
+//                                           {},
+                                           std::map<types::boundary_id , const Function<dim>*>(),
+                                           solution_n,
+                                           estimated_error_per_cell,
+                                           fe.component_mask(u_fe));
+
+        GridRefinement::refine_and_coarsen_fixed_number(triangulation,
+                                                        estimated_error_per_cell,
+                                                        0.3,
+                                                        0.03);
+
+        triangulation.prepare_coarsening_and_refinement();
+
+        SolutionTransfer<dim, BlockVector<double>> solution_transfer(dof_handler_ref);
+        solution_transfer.prepare_for_coarsening_and_refinement(solution_n);
+        std::cout << "pre-Dof: " << solution_n.size() << std::endl;
+        triangulation.execute_coarsening_and_refinement();
+
+        std::cout << "Before sys setup" << std::endl;
+//        lqph
+        system_setup(true);
+        std::cout << "post-Dof: " << solution_n.size() << std::endl;
+
+        std::cout << "After sys setup" << std::endl;
+
+
+
+        dof_handler_ref.distribute_dofs(fe);
+
+        BlockVector<double> tmp(dof_handler_ref.n_dofs());
+        solution_transfer.interpolate(solution_n, tmp);
+        solution_n = std::move(tmp);
+
+        constraints.clear();
+        DoFTools::make_hanging_node_constraints(dof_handler_ref,
+                                                constraints);
+
+        constraints.close();
+
+        constraints.distribute(solution_n);
+//        make_constraints(0);
+
+
+    }
+
+
 // @sect4{Solid::output_results}
 // Here we present how the results are written to file to be viewed
 // using ParaView or Visit. The method is similar to that shown in the
 // tutorials so will not be discussed in detail.
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::output_results() const {
+    void Solid<dim, NumberType>::output_results(unsigned int refinement_cycle) const {
         DataOut<dim> data_out;
         std::vector<DataComponentInterpretation::DataComponentInterpretation>
                 data_component_interpretation(dim, DataComponentInterpretation::component_is_part_of_vector);
@@ -1688,7 +1721,7 @@ namespace Cooks_Membrane {
         std::ostringstream filename;
         string file;
 
-        file = "Q" + to_string(parameters.poly_degree) + "cooks-membrane_solution-" + to_string(time.get_timestep()) +
+        file = "Q" + to_string(parameters.poly_degree) + "R" + to_string(refinement_cycle) + "cooks-membrane_soln-" + to_string(time.get_timestep()) +
                ".vtu";
 
         std::ofstream output(file.c_str());

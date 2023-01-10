@@ -79,6 +79,7 @@ using namespace dealii;
 // equations.  We now define the tolerances and the maximum number of
 // iterations for the Newton-Raphson nonlinear solver.
     struct NonlinearSolver {
+        std::string nonlinear_solver_type;
         unsigned int max_iterations_NR;
         double tol_f;
         double tol_u;

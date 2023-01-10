@@ -19,11 +19,15 @@ namespace Cooks_Membrane {
         newton_iteration++;
 
         double target_tolerance = 1.0e-8;
+        unsigned int max_nl_it = 1000;
 //        double step_tolerance = 1e-6;
 
         typename SUNDIALS::KINSOL<BlockVector<double>>::AdditionalData
                 additional_data;
         additional_data.function_tolerance = target_tolerance;
+        additional_data.maximum_non_linear_iterations = max_nl_it;
+//        additional_data.strategy = linesearch;
+        additional_data.strategy = dealii::SUNDIALS::KINSOL<BlockVector<double>>::AdditionalData::SolutionStrategy::newton;
 //        additional_data.step_tolerance = step_tolerance;
 
         SUNDIALS::KINSOL<BlockVector<double>> nonlinear_solver(additional_data);

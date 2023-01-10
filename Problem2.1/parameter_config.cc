@@ -127,6 +127,10 @@ void LinearSolver::parse_parameters(ParameterHandler &prm) {
 void NonlinearSolver::declare_parameters(ParameterHandler &prm) {
     prm.enter_subsection("Nonlinear solver");
     {
+        prm.declare_entry("Nonlinear solver", "kinsol",
+                          Patterns::Selection("newton|kinsol"),
+                          "Nonlinear solver");
+
         prm.declare_entry("Max iterations Newton-Raphson", "10",
                           Patterns::Integer(0),
                           "Number of Newton-Raphson iterations allowed");
@@ -145,6 +149,7 @@ void NonlinearSolver::declare_parameters(ParameterHandler &prm) {
 void NonlinearSolver::parse_parameters(ParameterHandler &prm) {
     prm.enter_subsection("Nonlinear solver");
     {
+        nonlinear_solver_type = prm.get("Nonlinear solver");
         max_iterations_NR = prm.get_integer("Max iterations Newton-Raphson");
         tol_f = prm.get_double("Tolerance force");
         tol_u = prm.get_double("Tolerance displacement");

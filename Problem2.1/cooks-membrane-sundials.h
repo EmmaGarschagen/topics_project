@@ -443,7 +443,7 @@ namespace Cooks_Membrane {
 
         // Set up the finite element system to be solved:
         void
-        system_setup(const bool initial_step);
+        system_setup();
 
         // Several functions to assemble the system and right hand side matrices
         // using multithreading. Each of them comes as a wrapper function, one
@@ -469,6 +469,9 @@ namespace Cooks_Membrane {
         // empty:
         void
         setup_qph();
+
+        void
+        re_setup_qph();
 
         // Solve for the displacement using a Newton-Raphson method. We break this
         // function into the nonlinear loop and the function that solves the
@@ -612,6 +615,9 @@ namespace Cooks_Membrane {
         void
         print_vertical_tip_displacement(unsigned int refinement_cycle);
 
+//        protected
+//        Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType>  material_direct;
+
 
     };
 
@@ -659,7 +665,7 @@ namespace Cooks_Membrane {
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::run() {
         make_grid();
-        system_setup(true);
+        system_setup();
         time.increment();
 
         // We then declare the incremental solution update $\varDelta
@@ -683,8 +689,20 @@ namespace Cooks_Membrane {
                 // ...solve the current time step and update total solution vector
                 // $\mathbf{\Xi}_{\textrm{n}} = \mathbf{\Xi}_{\textrm{n-1}} +
                 // \varDelta \mathbf{\Xi}$...
-//            solve_nonlinear_timestep(solution_delta);
-                solve_nonlinear_timestep_kinsol(solution_delta);
+                if(parameters.nonlinear_solver_type == "kinsol")
+                {
+                    std::cout << "Using Kinsol nonlinear solver" << std::endl;
+                    solve_nonlinear_timestep_kinsol(solution_delta);
+
+                }
+                else if (parameters.nonlinear_solver_type == "newton")
+                {
+                    std::cout << "Using Newton-Raphson nonlinear solver" << std::endl;
+                    solve_nonlinear_timestep(solution_delta);
+                }
+                else
+                    throw StandardExceptions::ExcNotImplemented("Nonlinear solver type not selected.");
+
                 solution_n += solution_delta;
 
                 // ...and plot the results before moving on happily to the next time
@@ -770,11 +788,10 @@ namespace Cooks_Membrane {
 // of components per block. Since the displacement is a vector component, the
 // first dim components belong to it.
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::system_setup(const bool initial_step) {
+    void Solid<dim, NumberType>::system_setup() {
         timer.enter_subsection("Setup system");
         std::vector<unsigned int> block_component(n_components, u_dof); // Displacement
 
-        if (initial_step) {
 
             // The DOF handler is then initialised and we renumber the grid in an
             // efficient manner. We also record the number of DOFs per block.
@@ -785,8 +802,6 @@ namespace Cooks_Membrane {
             DoFRenumbering::Cuthill_McKee(dof_handler_ref);
             DoFRenumbering::component_wise(dof_handler_ref, block_component);
             dofs_per_block = DoFTools::count_dofs_per_fe_block(dof_handler_ref, block_component);
-        }
-
 
             constraints.clear();
             DoFTools::make_hanging_node_constraints(dof_handler_ref,
@@ -819,7 +834,8 @@ namespace Cooks_Membrane {
                     constraints.clear();
                     constraints.copy_from(homogeneous_constraints);
 
-        }}
+                }
+            }
             constraints.close();
 
 
@@ -856,6 +872,9 @@ namespace Cooks_Membrane {
             sparsity_pattern.copy_from(csp);
         }
 
+        std::ofstream out_dsp("sparsity_pattern1.svg");
+        sparsity_pattern.print_svg(out_dsp);
+
         tangent_matrix.reinit(sparsity_pattern);
 
         // We then set up storage vectors
@@ -868,7 +887,12 @@ namespace Cooks_Membrane {
         // ...and finally set up the quadrature
         // point history:
 
-        setup_qph();
+//        if (initial_step) {
+//        setup_qph();
+//        }
+//        else {
+//            re_setup_qph();
+//        }
 
         timer.leave_subsection();
     }
@@ -883,6 +907,7 @@ namespace Cooks_Membrane {
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::setup_qph() {
         std::cout << "    Setting up quadrature point data..." << std::endl;
+//        triangulation.clear_user_data();
 
         quadrature_point_history.initialize(triangulation.begin_active(),
                                             triangulation.end(),
@@ -895,6 +920,63 @@ namespace Cooks_Membrane {
                 triangulation.begin_active(); cell != triangulation.end(); ++cell) {
             const std::vector<std::shared_ptr<PointHistory<dim, NumberType> > > lqph =
                     quadrature_point_history.get_data(cell);
+            Assert(lqph.size() == n_q_points, ExcInternalError());
+            for (unsigned int q_point = 0; q_point < n_q_points; ++q_point)
+                lqph[q_point]->setup_lqp(parameters);
+        }
+    }
+
+//    template<int dim, typename NumberType>
+//    void Solid<dim, NumberType>::re_setup_qph() {
+//        std::cout << "    Setting up quadrature point data...again..." << std::endl;
+//        triangulation.clear_user_data();
+
+//        {
+//          std::vector<PointHistory<dim, NumberType>> tmp;
+//          quadrature_point_history.swap(tmp);
+//        }
+//        quadrature_point_history.resize(
+//          triangulation.n_locally_owned_active_cells() * n_q_points);
+
+////        quadrature_point_history.initialize(triangulation.begin_active(),
+////                                            triangulation.end(),
+////                                            n_q_points);
+
+//        unsigned int history_index = 0;
+//        for (auto &cell : triangulation.active_cell_iterators())
+//          if (cell->is_locally_owned())
+//            {
+//              cell->set_user_pointer(&quadrature_point_history[history_index]);
+//              history_index += n_q_points;
+//            }
+//        Assert(history_index == n_q_points,
+//               ExcInternalError());
+//    }
+
+    template<int dim, typename NumberType>
+    void Solid<dim, NumberType>::re_setup_qph() {
+        std::cout << "    Setting up quadrature point data... again..." << std::endl;
+//        triangulation.clear_user_data();
+
+        quadrature_point_history.clear();
+
+        std::cout << "  aa " << std::endl;
+
+        quadrature_point_history.initialize(triangulation.begin_active(),
+                                            triangulation.end(),
+                                            n_q_points);
+
+        std::cout << "  ab " << std::endl;
+
+        // Next we setup the initial quadrature point data. Note that when
+        // the quadrature point data is retrieved, it is returned as a vector
+        // of smart pointers.
+        for (typename Triangulation<dim>::active_cell_iterator cell =
+                triangulation.begin_active(); cell != triangulation.end(); ++cell) {
+            std::cout << "  a " << std::endl;
+            const std::vector<std::shared_ptr<PointHistory<dim, NumberType> > > lqph =
+                    quadrature_point_history.get_data(cell);
+            std::cout << "  b " << std::endl;
             Assert(lqph.size() == n_q_points, ExcInternalError());
             for (unsigned int q_point = 0; q_point < n_q_points; ++q_point)
                 lqph[q_point]->setup_lqp(parameters);
@@ -1179,6 +1261,12 @@ namespace Cooks_Membrane {
                     symm_grad_Nx;
 
             bool rhs_only;
+//            std::shared_ptr<Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> > material_direct = std::make_shared< Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType>>(parameters);
+//            material_direct.
+
+            Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material_direct;
+//            material_direct.reset(new Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType>(parameters));
+//            Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType>  material_direct(parameters);
 
             ScratchData_ASM(const FiniteElement<dim> &fe_cell,
                             const QGauss<dim> &qf_cell,
@@ -1186,7 +1274,8 @@ namespace Cooks_Membrane {
                             const QGauss<dim - 1> &qf_face,
                             const UpdateFlags uf_face,
                             const BlockVector<double> &solution_total,
-                            const bool rhs_only_in)
+                            const bool rhs_only_in,
+                            const Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material_direct_in)
                     :
                     solution_total(solution_total),
                     solution_grads_u_total(qf_cell.size()),
@@ -1197,7 +1286,9 @@ namespace Cooks_Membrane {
                     symm_grad_Nx(qf_cell.size(),
                                  std::vector<SymmetricTensor<2, dim, NumberType> >
                                          (fe_cell.dofs_per_cell)),
-                    rhs_only(rhs_only_in) {}
+                    rhs_only(rhs_only_in),
+                    material_direct(material_direct_in)
+            {}
 
             ScratchData_ASM(const ScratchData_ASM &rhs)
                     :
@@ -1210,7 +1301,10 @@ namespace Cooks_Membrane {
                                        rhs.fe_face_values_ref.get_quadrature(),
                                        rhs.fe_face_values_ref.get_update_flags()),
                     grad_Nx(rhs.grad_Nx),
-                    symm_grad_Nx(rhs.symm_grad_Nx) {}
+                    symm_grad_Nx(rhs.symm_grad_Nx),
+                    rhs_only(rhs.rhs_only),
+                    material_direct(rhs.material_direct)
+            {}
 
             void reset() {
                 const unsigned int n_q_points = fe_values_ref.get_quadrature().size();
@@ -1369,14 +1463,16 @@ namespace Cooks_Membrane {
             const FEValuesExtractors::Vector &u_fe = data.solid->u_fe;
 
 
+//            std::shared_ptr<Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> > material_direct;
+
             data.reset();
             scratch.reset();
             scratch.fe_values_ref.reinit(cell);
             cell->get_dof_indices(data.local_dof_indices);
 
-            const std::vector<std::shared_ptr<const PointHistory<dim, NumberType> > > lqph =
-                    const_cast<const Solid<dim, NumberType> *>(data.solid)->quadrature_point_history.get_data(cell);
-            Assert(lqph.size() == n_q_points, ExcInternalError());
+//            const std::vector<std::shared_ptr<const PointHistory<dim, NumberType> > > lqph =
+//                    const_cast<const Solid<dim, NumberType> *>(data.solid)->quadrature_point_history.get_data(cell);
+//            Assert(lqph.size() == n_q_points, ExcInternalError());
 
             // We first need to find the solution gradients at quadrature points
             // inside the current cell and then we update each local QP using the
@@ -1407,8 +1503,11 @@ namespace Cooks_Membrane {
                     } else Assert(k_group <= u_dof, ExcInternalError());
                 }
 
-                const SymmetricTensor<2, dim, NumberType> tau = lqph[q_point]->get_tau(C, det_F, F);
-                const SymmetricTensor<4, dim, NumberType> Jc = lqph[q_point]->get_Jc(C, det_F, F);
+//                const SymmetricTensor<2, dim, NumberType> tau = lqph[q_point]->get_tau(C, det_F, F);
+//                const SymmetricTensor<4, dim, NumberType> Jc = lqph[q_point]->get_Jc(C, det_F, F);
+
+                const SymmetricTensor<2, dim, NumberType> tau = scratch.material_direct.get_tau(C, det_F, F);
+                const SymmetricTensor<4, dim, NumberType> Jc = scratch.material_direct.get_Jc(C, det_F, F);
                 const Tensor<2, dim, NumberType> tau_ns(tau);
 
 
@@ -1485,8 +1584,9 @@ namespace Cooks_Membrane {
 
         const BlockVector<double> solution_total(get_total_solution(solution_delta));
         typename Assembler_Base<dim, NumberType>::Local_ASM per_task_data(this, rhs_only);
+Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material_direct(parameters);
         typename Assembler_Base<dim, NumberType>::ScratchData_ASM scratch_data(fe, qf_cell, uf_cell, qf_face, uf_face,
-                                                                               solution_total, rhs_only);
+                                                                               solution_total, rhs_only,material_direct);
         Assembler<dim, NumberType> assembler;
 
         WorkStream::run(dof_handler_ref.begin_active(),
@@ -1662,37 +1762,17 @@ namespace Cooks_Membrane {
         triangulation.execute_coarsening_and_refinement();
 
         std::cout << "Before sys setup" << std::endl;
-//        lqph
-        system_setup(true);
+        system_setup();
+
         std::cout << "post-Dof: " << solution_n.size() << std::endl;
 
         std::cout << "After sys setup" << std::endl;
-
-
-
-        dof_handler_ref.distribute_dofs(fe);
-
-        BlockVector<double> tmp(dof_handler_ref.n_dofs());
-        solution_transfer.interpolate(solution_n, tmp);
-        solution_n = std::move(tmp);
-
-        constraints.clear();
-        DoFTools::make_hanging_node_constraints(dof_handler_ref,
-                                                constraints);
-
-        constraints.close();
-
-        constraints.distribute(solution_n);
-//        make_constraints(0);
 
 
     }
 
 
 // @sect4{Solid::output_results}
-// Here we present how the results are written to file to be viewed
-// using ParaView or Visit. The method is similar to that shown in the
-// tutorials so will not be discussed in detail.
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::output_results(unsigned int refinement_cycle) const {
         DataOut<dim> data_out;
@@ -1721,7 +1801,7 @@ namespace Cooks_Membrane {
         std::ostringstream filename;
         string file;
 
-        file = "Q" + to_string(parameters.poly_degree) + "R" + to_string(refinement_cycle) + "cooks-membrane_soln-" + to_string(time.get_timestep()) +
+        file = "Q" + to_string(parameters.poly_degree) + "R" + to_string(refinement_cycle) +parameters.nonlinear_solver_type+ "_cooks-membrane_soln-" + to_string(time.get_timestep()) +
                ".vtu";
 
         std::ofstream output(file.c_str());

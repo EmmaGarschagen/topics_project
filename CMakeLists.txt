@@ -2,23 +2,28 @@ cmake_minimum_required(VERSION 3.5)
 
 PROJECT(emma-topics-project)
 
-file(GLOB PART1_SRCS Problem1/*.cc )
-file(GLOB PART2_SRCS Problem2.1/*.cc Problem2.1/*.h)
-file(GLOB PART3_SRCS Problem3/*.cc Problem3/*.h)
+#file(GLOB PART1_SRCS Problem1/*.cc Problem1/*.h)
+file(GLOB PART2_SRCS Problem2/*.cc Problem2/*.h)
+file(GLOB PART2R_SRCS Problem2_Refinement/*.cc Problem2_Refinement/*.h)
 
-FIND_PACKAGE(deal.II 9.4.0
-        HINTS /home/emma/dealii-candi/deal.II-v9.4.0 ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
+
+
+
+FIND_PACKAGE(deal.II 9.4.1
+        HINTS /home/emma/dealii-candi/deal.II-v9.4.1 ${deal.II_DIR} ${DEAL_II_DIR} ../ ../../ $ENV{DEAL_II_DIR}
         )
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 
-ADD_EXECUTABLE( part1 ${PART1_SRCS})
-DEAL_II_SETUP_TARGET(part1)
 
-ADD_EXECUTABLE( part2 ${PART2_SRCS})
+#ADD_EXECUTABLE( part1 ${PART1_SRCS})
+#DEAL_II_SETUP_TARGET(part1)
+
+ADD_EXECUTABLE( part2 ${PART2_SRCS} Problem2/cooks-membrane-sundials.h)
 DEAL_II_SETUP_TARGET(part2)
+ADD_EXECUTABLE( part2_refine ${PART2R_SRCS})
+DEAL_II_SETUP_TARGET(part2_refine)
 
-ADD_EXECUTABLE( part3 ${PART3_SRCS} Problem3/incompressible_elasticity.cc Problem3/incompressible_elasticity.h Problem3/parameter_config.cc Problem3/parameter_config.h Problem3/time.h Problem3/error_check.h)
-DEAL_II_SETUP_TARGET(part3)
+
 
 CMAKE_MINIMUM_REQUIRED(VERSION 3.1.0)
 

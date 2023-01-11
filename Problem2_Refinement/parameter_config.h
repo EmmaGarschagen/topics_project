@@ -27,6 +27,7 @@ using namespace dealii;
 
     struct Geometry
     {
+        double traction;
         unsigned int elements_per_edge;
         double scale;
 

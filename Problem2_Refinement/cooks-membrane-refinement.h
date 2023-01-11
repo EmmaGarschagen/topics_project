@@ -2,13 +2,16 @@
 #define COOKSMEMBRANE_H
 
 /* ---------------------------------------------------------------------
- * Problem 1: Finite Deformation Elasticit
+ * Problem 2: Finite Deformation Elasticity with Adaptive Mesh Refinement.
  * Emma Garschagen
  * November 2022
  *
  * This code is based on a modified Cook's Membrane problem developed for
- * the deal code gallery by Jean-Paul Pelteret, University of Erlangen-Nuremberg,
- * and Andrew McBride, University of Cape Town, 2015, 2017.
+ * the deal.ii code gallery by Jean-Paul Pelteret, University of Erlangen-Nuremberg,
+ * and Andrew McBride, University of Cape Town, 2015, 2017 and Step-77 from the deal.ii
+ * tutorials contributed by Wolfgang Bangerth, Colorado State University.
+ * Ernesto Ismail contributed significantly to the implementation of adaptive
+ * mesh refinement.
  * ---------------------------------------------------------------------
  */
 
@@ -32,6 +35,7 @@
 #include <deal.II/grid/grid_out.h>
 #include <deal.II/grid/tria_iterator.h>
 #include <deal.II/grid/tria_accessor.h>
+#include <deal.II/grid/grid_refinement.h>
 
 #include <deal.II/fe/fe_dgp_monomial.h>
 #include <deal.II/fe/fe_q.h>
@@ -53,6 +57,8 @@
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/vector_tools.h>
+#include <deal.II/numerics/error_estimator.h>
+#include <deal.II/numerics/solution_transfer.h>
 
 #include <deal.II/base/config.h>
 
@@ -78,79 +84,13 @@
 
 bool almost_equals(const double &a,
                    const double &b,
-                   const double &tol = 1e-8);// {
-//    return fabs(a - b) < tol;
-//}
+                   const double &tol = 1e-8);
 
 namespace Cooks_Membrane {
     using namespace dealii;
     using namespace Physics::Transformations;
     using namespace Physics::Elasticity;
     using namespace std;
-
-
-    template<int dim, typename NumberType>
-    SymmetricTensor<4, dim, NumberType>
-    dif_tensor(SymmetricTensor<2, dim, NumberType> (*func)(SymmetricTensor<2, dim, NumberType>),
-               const SymmetricTensor<2, dim, NumberType> &val,
-               const NumberType &eps = 1e-6) {
-        SymmetricTensor<2, dim, NumberType> val_hat, func_val, tmp_grad;
-        SymmetricTensor<4, dim, NumberType> out;
-
-        func_val = func(val);
-
-        for (int i = 0; i < dim; ++i) {
-            for (int j = 0; j < dim; ++j) {
-                val_hat = val;
-                val_hat[i][j] += eps;
-                tmp_grad = (func(val_hat) - func_val) / eps;
-
-                for (int k = 0; k < dim; ++k)
-                    for (int l = 0; l < dim; ++l)
-                        out[i][j][k][l] = tmp_grad[k][l];
-
-            }
-        }
-        return out;
-    }
-
-    template<int dim, typename NumberType>
-    void pprint(const SymmetricTensor<2, dim, NumberType> &val) {
-        for (int i = 0; i < dim; ++i) {
-            for (int j = 0; j < dim; ++j) {
-                cout << "\t" << val[i][j];
-            }
-            cout << endl;
-        }
-    }
-
-    template<int dim, typename NumberType>
-    void pprint(const SymmetricTensor<4, dim, NumberType> &val) {
-        typedef pair<unsigned int, unsigned int> i_pair;
-        vector<i_pair> voigt;
-
-        if (dim == 3)
-            voigt = vector<i_pair>({i_pair(0, 0),
-                                    i_pair(1, 1),
-                                    i_pair(2, 2),
-                                    i_pair(0, 1),
-                                    i_pair(0, 2),
-                                    i_pair(1, 2)});
-        else if (dim == 2)
-            voigt = vector<i_pair>({i_pair(0, 0),
-                                    i_pair(1, 1),
-                                    i_pair(0, 1)});
-        else
-            throw StandardExceptions::ExcNotImplemented("WTF?");
-
-
-        for (const auto &row: voigt) {
-            for (const auto &col: voigt)
-                cout << "\t" << val[row.first][row.second][col.first][col.second];
-        cout << endl;
-        }
-    }
-
 
     inline double degrees_to_radians(const double &degrees) {
         return degrees * (M_PI / 180.0);
@@ -160,11 +100,13 @@ namespace Cooks_Membrane {
 
 
 // @sect3{Compressible Mooney_Rivlin material within a one-field formulation}
-
-
     template<int dim, typename NumberType>
     class Material_Compressible_Mooney_Rivlin_One_Field {
     public:
+        /** Implementation of a single-field Mooney-Rivlin material model
+             *
+             * @param parameters From the parameter config file, the relevant material constants are extracted.
+             */
         Material_Compressible_Mooney_Rivlin_One_Field(const Parameters::AllParameters &parameters)
                 :
                 c0(parameters.c0),
@@ -178,12 +120,26 @@ namespace Cooks_Membrane {
         SymmetricTensor<2, dim, NumberType>
         get_tau(const SymmetricTensor<2, dim, NumberType> &C,
                 const NumberType &det_F,
-                const Tensor<2, dim, NumberType> &F) {
+                const Tensor<2, dim, NumberType> &F)
+        /** Get the Kirchhoff stress, $\boldsymbol{\tau}$.
+         *
+         * @param C Right Cauchy-Green Ttnsor
+         * @param det_F Jacobian
+         * @param F Deformation gradient
+         * @return A symmetric tensor of rank 2
+         */
+        {
             return det_F * get_CauchyStress(C, det_F, F);
         }
 
         SymmetricTensor<2, dim, NumberType>
-        get_GreenLagrangeStrain(const Tensor<2, dim, NumberType> &F) const {
+        get_GreenLagrangeStrain(const Tensor<2, dim, NumberType> &F) const
+        /** Get the Green-Lagrange strain for post-processing.
+         *
+         * @param F Deformation gradient
+         * @return  A symmetric tensor of rank 2
+         */
+        {
             return 0.5 * (symmetrize(transpose(F) * F) - unit_symmetric_tensor<dim, NumberType>());
         }
 
@@ -191,13 +147,27 @@ namespace Cooks_Membrane {
         SymmetricTensor<2, dim, NumberType>
         get_CauchyStress(const SymmetricTensor<2, dim, NumberType> &C,
                          const NumberType &det_F,
-                         const Tensor<2, dim, NumberType> &F) {
+                         const Tensor<2, dim, NumberType> &F)
+        /** Get the Cauchy stress, $\boldsymbol{\sigma}$.
+        *
+        * @param C Right Cauchy-Green tensor
+        * @param det_F Jacobian
+        * @param F Deformation gradient
+        * @return A symmetric tensor of rank 2
+        */
+        {
             return symmetrize(pow(det_F, -1) * F * get_SecondPiolaStress(C, det_F) * transpose(F));
         }
 
 
         SymmetricTensor<2, dim, NumberType>
-        get_CauchyStress(const Tensor<2, dim, NumberType> &F) {
+        get_CauchyStress(const Tensor<2, dim, NumberType> &F)
+        /** Get the Cauchy stress for post-processing.
+         *
+         * @param F Deformation gradient
+         * @return A symmetric tensor of rank 2
+         */
+        {
             const NumberType det_F = determinant(F);
             const SymmetricTensor<2, dim, NumberType> C = symmetrize(transpose(F) * F);
 
@@ -206,7 +176,13 @@ namespace Cooks_Membrane {
 
 
         SymmetricTensor<2, dim, NumberType>
-        get_SecondPiolaStress(const Tensor<2, dim, NumberType> &F) {
+        get_SecondPiolaStress(const Tensor<2, dim, NumberType> &F)
+        /** Get the second Piola stress for post-processing.
+         *
+         * @param F Deformation gradient
+         * @return A symmetric tensor of rank 2
+         */
+        {
             const NumberType det_F = determinant(F);
             const SymmetricTensor<2, dim, NumberType> C = transpose(F) * F;
 
@@ -218,7 +194,15 @@ namespace Cooks_Membrane {
         SymmetricTensor<4, dim, NumberType>
         get_Jc(const SymmetricTensor<2, dim, NumberType> &C,
                const NumberType &det_F,
-               const Tensor<2, dim, NumberType> &F) const {
+               const Tensor<2, dim, NumberType> &F) const
+        /** The tangent, $J\mathfrak{c}$
+        *
+        * @param C Right Cauchy-Green tensor
+        * @param det_F Jacobian
+        * @param F Deformation gradient
+        * @return A symmetric tensor of rank 2
+        */
+        {
             return det_F *
                    Physics::Transformations::Piola::push_forward(get_LagrangeElasticityTensor(C, det_F, F), F);
         }
@@ -230,7 +214,14 @@ namespace Cooks_Membrane {
 
         SymmetricTensor<2, dim, NumberType>
         get_SecondPiolaStress(const SymmetricTensor<2, dim, NumberType> &C,
-                              const NumberType &det_F) const {
+                              const NumberType &det_F) const
+                              /** Get second Piola stress.
+                               *
+                               * @param C Right Cauchy-Green tensor
+                               * @param det_F Jacobian
+                               * @return  A symmetric tensor of rank 2
+                               */
+        {
             return 2 * (c1 + c2 * trace(C)) * unit_symmetric_tensor<dim>() - 2 * c2 * C +
                    (2 * c0 * det_F * (det_F - 1) - d) * invert(C);
         }
@@ -239,7 +230,15 @@ namespace Cooks_Membrane {
         SymmetricTensor<4, dim, NumberType>
         get_LagrangeElasticityTensor(const SymmetricTensor<2, dim, NumberType> &C,
                                      const NumberType &det_F,
-                                     const Tensor<2, dim, NumberType> &F) const {
+                                     const Tensor<2, dim, NumberType> &F) const
+        /** Get Lagrangian elasticity tensor.
+         *
+         * @param C Right Cauchy-Green tensor
+         * @param det_F Jacobian
+         * @param F Deformation gradient
+         * @return A symmetric tensor of rank 4
+         */
+         {
             const SymmetricTensor<2, dim, NumberType> C_inv = invert(C);
 
             return 4 * c2 * Physics::Elasticity::StandardTensors<dim>::IxI +
@@ -253,6 +252,9 @@ namespace Cooks_Membrane {
     template<int dim>
     class GradientPostprocessor : public DataPostprocessorTensor<dim> {
     public:
+        /** Post-processor to find the solution gradient
+        *
+        */
         GradientPostprocessor()
                 :
                 DataPostprocessorTensor<dim>("grad_u",
@@ -263,18 +265,10 @@ namespace Cooks_Membrane {
         evaluate_vector_field
                 (const DataPostprocessorInputs::Vector<dim> &input_data,
                  std::vector<Vector<double> > &computed_quantities) const override {
-            // ensure that there really are as many output slots
-            // as there are points at which DataOut provides the
-            // gradients:
             AssertDimension(input_data.solution_gradients.size(),
                             computed_quantities.size());
 
             for (unsigned int p = 0; p < input_data.solution_gradients.size(); ++p) {
-                // ensure that each output slot has exactly 'dim*dim'
-                // components (as should be expected, given that we
-                // want to create tensor-valued outputs), and copy the
-                // gradients of the solution at the evaluation points
-                // into the output slots:
                 AssertDimension(computed_quantities[p].size(),
                                 (Tensor<2, dim>::n_independent_components));
                 for (unsigned int d = 0; d < dim; ++d)
@@ -288,6 +282,9 @@ namespace Cooks_Membrane {
     template<int dim>
     class DeformationGradientPostprocessor : public DataPostprocessorTensor<dim> {
     public:
+        /** Post-processor to find the deformation gradient
+        *
+        */
         DeformationGradientPostprocessor()
                 :
                 DataPostprocessorTensor<dim>("F",
@@ -298,18 +295,10 @@ namespace Cooks_Membrane {
         evaluate_vector_field
                 (const DataPostprocessorInputs::Vector<dim> &input_data,
                  std::vector<Vector<double> > &computed_quantities) const override {
-            // ensure that there really are as many output slots
-            // as there are points at which DataOut provides the
-            // gradients:
             AssertDimension(input_data.solution_gradients.size(),
                             computed_quantities.size());
 
             for (unsigned int p = 0; p < input_data.solution_gradients.size(); ++p) {
-                // ensure that each output slot has exactly 'dim*dim'
-                // components (as should be expected, given that we
-                // want to create tensor-valued outputs), and copy the
-                // gradients of the solution at the evaluation points
-                // into the output slots:
                 AssertDimension(computed_quantities[p].size(),
                                 (Tensor<2, dim>::n_independent_components));
                 for (unsigned int d = 0; d < dim; ++d)
@@ -323,6 +312,9 @@ namespace Cooks_Membrane {
     template<int dim, typename NumberType>
     class CauchyStressPostprocessor : public DataPostprocessorTensor<dim> {
     public:
+        /** Post-processor to find the Cauchy stress
+        *
+        */
         CauchyStressPostprocessor(const Parameters::AllParameters &parameters)
                 : DataPostprocessorTensor<dim>("Cauchy_stress",
                                                update_gradients), parameters(parameters) {}
@@ -363,6 +355,9 @@ namespace Cooks_Membrane {
     template<int dim, typename NumberType>
     class LagrangeStrainPostprocessor : public DataPostprocessorTensor<dim> {
     public:
+        /** Post-processor to find the Green-Lagrange strain
+        *
+        */
         LagrangeStrainPostprocessor(const Parameters::AllParameters &parameters)
                 : DataPostprocessorTensor<dim>("strain",
                                                update_gradients), parameters(parameters) {}
@@ -406,41 +401,37 @@ namespace Cooks_Membrane {
 
 // @sect3{Quadrature point history}
 
-// As seen in step-18, the <code> PointHistory </code> class offers a method
-// for storing data at the quadrature points.  Here each quadrature point
-// holds a pointer to a material description.  Thus, different material models
-// can be used in different regions of the domain.  Among other data, we
-// choose to store the Kirchhoff stress $\boldsymbol{\tau}$ and the tangent
-// $J\mathfrak{c}$ for the quadrature points.
     template<int dim, typename NumberType>
     class PointHistory {
     public:
+        /** PointHistory
+         * Each quadrature point holds a pointer to the material description;
+         * the Kirchhoff stress $\boldsymbol{\tau}$ and tangent $J\mathfrak{c}$
+         * are stored in these points.
+         */
         PointHistory() {}
 
         virtual ~PointHistory() {}
 
-        // The first function is used to create a material object and to
-        // initialize all tensors correctly: The second one updates the stored
-        // values and stresses based on the current deformation measure
-        // $\textrm{Grad}\mathbf{u}_{\textrm{n}}$.
+        // Create material object
         void setup_lqp(const Parameters::AllParameters &parameters) {
             material.reset(new Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType>(parameters));
         }
 
+        // Update second Piola stress
         SymmetricTensor<2, dim, NumberType>
         get_SecondPiolaStress(const Tensor<2, dim, NumberType> &C,
                               const NumberType &det_F) const {
             return material->get_SecondPiolaStress(C, det_F);
         }
 
+        // Update Green-Lagrange strain
         SymmetricTensor<2, dim, NumberType>
         get_GreenLagrangeStrain(const Tensor<2, dim, NumberType> &F) const {
             return material->get_GreenLagrangeStrain(F);
         }
 
-        // Here are the kinetic variables. These are used in the material and
-        // global tangent matrix and residual assembly operations:
-        // First is the Kirchhoff stress:
+        // Update Kirchhoff stress
         SymmetricTensor<2, dim, NumberType>
         get_tau(const SymmetricTensor<2, dim, NumberType> &C,
                 const NumberType &det_F,
@@ -448,7 +439,7 @@ namespace Cooks_Membrane {
             return material->get_tau(C, det_F, F);
         }
 
-        // And the tangent:
+        // Update tangent
         SymmetricTensor<4, dim, NumberType>
         get_Jc(const SymmetricTensor<2, dim, NumberType> &C,
                const NumberType &det_F,
@@ -456,16 +447,6 @@ namespace Cooks_Membrane {
             return material->get_Jc(C, det_F, F);
         }
 
-        SymmetricTensor<4, dim, NumberType>
-        get_LagrangeElasticityTensor(const SymmetricTensor<2, dim, NumberType> &C,
-                                     const NumberType &det_F,
-                                     const Tensor<2, dim, NumberType> &F) const {
-            return material->get_LagrangeElasticityTensor(C, det_F, F);
-        }
-        // In terms of member functions, this class stores for the quadrature
-        // point it represents a copy of a material type in case different
-        // materials are used in different regions of the domain, as well as the
-        // inverse of the deformation gradient...
     private:
         std::shared_ptr<Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> > material;
     };
@@ -473,17 +454,13 @@ namespace Cooks_Membrane {
 
 // @sect3{Quasi-static compressible finite-strain solid}
 
-    // Forward declarations for classes that will
-    // perform assembly of the linear system.
+
     template<int dim, typename NumberType>
     struct Assembler_Base;
     template<int dim, typename NumberType>
     struct Assembler;
 
-// The Solid class is the central class in that it represents the problem at
-// hand. It follows the usual scheme in that all it really has is a
-// constructor, destructor and a <code>run()</code> function that dispatches
-// all the work to private functions of this class:
+
     template<int dim, typename NumberType>
     class Solid {
     public:
@@ -498,106 +475,119 @@ namespace Cooks_Membrane {
 
     private:
 
-
+        /**
+        * Create triangulation object
+        */
         void
         make_grid();
 
-        // Set up the finite element system to be solved:
+        /**
+         * Set up finite element system
+         */
         void
         system_setup();
 
-        // Several functions to assemble the system and right hand side matrices
-        // using multithreading. Each of them comes as a wrapper function, one
-        // that is executed to do the work in the WorkStream model on one cell,
-        // and one that copies the work done on this one cell into the global
-        // object that represents it:
+        /**
+         * Assemble the system and right hand side matrices in WorkStream
+         */
         void
         assemble_system(const BlockVector<double> &solution_delta, const bool rhs_only);
 
-        // We use a separate data structure to perform the assembly. It needs access
-        // to some low-level data, so we simply befriend the class instead of
-        // creating a complex interface to provide access as necessary.
+
+        /**
+         * Data structures with necessary objects for assembly
+         */
         friend struct Assembler_Base<dim, NumberType>;
         friend struct Assembler<dim, NumberType>;
 
 
-        // Apply Dirichlet boundary conditions on the displacement field
+        /**
+         * Apply Dirichlet boundary conditions
+         * @param it_nr Newton iteration
+         */
         void
         make_constraints(const int &it_nr);
 
-        // Create and update the quadrature points. Here, no data needs to be
-        // copied into a global object, so the copy_local_to_global function is
-        // empty:
-        void
-        setup_qph();
 
-        // Solve for the displacement using a Newton-Raphson method. We break this
-        // function into the nonlinear loop and the function that solves the
-        // linearized Newton-Raphson step:
+        /**
+         * Solve for displacement using a Newton-Raphson scheme as implemented in Problem 1
+         * @param solution_delta Solution increment $\nabla\boldsymbol{u}$
+         */
         void
         solve_nonlinear_timestep(BlockVector<double> &solution_delta);
-
+        /**
+         * Solve for displacement using a SUNDIALS::KINSOL
+         * @param solution_delta Solution increment $\nabla\boldsymbol{u}$
+         * @return
+         */
         unsigned int
         solve_nonlinear_timestep_kinsol(BlockVector<double> &solution_delta);
 
         std::unique_ptr<SparseDirectUMFPACK> jacobian_matrix_factorization;
 
+        /**
+         * Compute and factorise the tangent matrix
+         * @param newton_update_in Newton update
+         * @param newton_iteration Newton iteration
+         */
         void
         compute_and_factorize_jacobian(const BlockVector<double> &newton_update_in, const double newton_iteration);
-
+        /**
+         * Solve the linear system using Kinsol
+         * @param rhs Righthand side vector
+         * @param present_solution Current solution vector
+         */
         void
         solve_linear_kinsol(const BlockVector<double> &rhs,
                             BlockVector<double> &present_solution);
 
-
+        /**
+         * Solve linear system using UMFPACK
+         * @param newton_update Newton update
+         */
         std::pair<unsigned int, double>
         solve_linear_system(BlockVector<double> &newton_update);
 
-        // Solution retrieval as well as post-processing and writing data to file:
+        /**
+         * Retrieve total solution
+         * @param solution_delta Solution increment $\nabla\boldsymbol{u}$
+         */
         BlockVector<double>
         get_total_solution(const BlockVector<double> &solution_delta) const;
-
+        /**
+         * Refine mesh based on displacement error.
+         */
         void
-        output_results() const;
+        refine_mesh();
+        /**
+         * Post-process solution and write to file.
+         */
+        void
+        output_results(unsigned int refinement_cycle) const;
 
-        // Finally, some member variables that describe the current state: A
-        // collection of the parameters used to describe the problem setup...
-        const Parameters::AllParameters &parameters;
 
-        // ...the volume of the reference and current configurations...
-        double vol_reference;
-        double vol_current;
+        const Parameters::AllParameters &parameters; /**< Parameters in config file loaded*/
 
-        // ...and description of the geometry on which the problem is solved:
-        Triangulation<dim> triangulation;
+        double vol_reference; /**< Reference volume */
+        double vol_current; /**< Current volume */
 
-        // Also, keep track of the current time and the time spent evaluating
-        // certain functions
-        Time time;
-        TimerOutput timer;
+        Triangulation<dim> triangulation; /**< Geometry of the problem*/
 
-        // A storage object for quadrature point information. As opposed to
-        // step-18, deal.II's native quadrature point data manager is employed here.
+        Time time; /**< Keep track of current time */
+        TimerOutput timer; /**< Keep track of compute time*/
+
         CellDataStorage<typename Triangulation<dim>::cell_iterator,
-                PointHistory<dim, NumberType> > quadrature_point_history;
+                PointHistory<dim, NumberType> > quadrature_point_history; /**< Storage object for quadrature point information */
 
-        // A description of the finite-element system including the displacement
-        // polynomial degree, the degree-of-freedom handler, number of DoFs per
-        // cell and the extractor objects used to retrieve information from the
-        // solution vectors:
-        const unsigned int degree;
+
+        // The finite element system:
+        const unsigned int degree; /**< Solution polynomial degree*/
         const FESystem<dim> fe;
         DoFHandler<dim> dof_handler_ref;
         const unsigned int dofs_per_cell;
-        const FEValuesExtractors::Vector u_fe;
+        const FEValuesExtractors::Vector u_fe; /**< Extractor object to retrieve information from solution vector*/
 
-        // Description of how the block-system is arranged. There is just 1 block,
-        // that contains a vector DOF $\mathbf{u}$.
-        // There are two reasons that we retain the block system in this problem.
-        // The first is pure laziness to perform further modifications to the
-        // code from which this work originated. The second is that a block system
-        // would typically necessary when extending this code to multiphysics
-        // problems.
+        // Block system:
         static const unsigned int n_blocks = 1;
         static const unsigned int n_components = dim;
         static const unsigned int first_u_component = 0;
@@ -608,26 +598,20 @@ namespace Cooks_Membrane {
 
         std::vector<types::global_dof_index> dofs_per_block;
 
-        // Rules for Gauss-quadrature on both the cell and faces. The number of
-        // quadrature points on both cells and faces is recorded.
+        // Gauss quadature rules:
         const QGauss<dim> qf_cell;
         const QGauss<dim - 1> qf_face;
         const unsigned int n_q_points;
         const unsigned int n_q_points_f;
 
-        // Objects that store the converged solution and right-hand side vectors,
-        // as well as the tangent matrix. There is a AffineConstraints object used
-        // to keep track of constraints.  We make use of a sparsity pattern
-        // designed for a block system.
-        AffineConstraints<double> constraints;
+        AffineConstraints<double> constraints; /**< Keep track of constraints*/
         BlockSparsityPattern sparsity_pattern;
-        BlockSparseMatrix<double> tangent_matrix;
-        BlockVector<double> system_rhs;
-        BlockVector<double> solution_n;
+        BlockSparseMatrix<double> tangent_matrix; /**< System tangent matrix*/
+        BlockVector<double> system_rhs; /**< System right-hand side vector*/
+        BlockVector<double> solution_n; /**< Current solution*/
 
 
-        // Then define a number of variables to store norms and update norms and
-        // normalisation factors.
+        // Store and update norms:
         struct Errors {
             Errors()
                     :
@@ -651,25 +635,39 @@ namespace Cooks_Membrane {
         Errors error_residual, error_residual_0, error_residual_norm, error_update,
                 error_update_0, error_update_norm;
 
-        // Methods to calculate error measures
+        /**
+         * Get the residual error
+         * @param error_residual
+         */
         void
         get_error_residual(Errors &error_residual);
-
+        /**
+         * Update the error
+         * @param newton_update
+         * @param error_update
+         */
         void
         get_error_update(const BlockVector<double> &newton_update,
                          Errors &error_update);
 
-        // Print information to screen in a pleasing way...
+
+        /**
+         * Print to screen header
+         */
         static
         void
         print_conv_header();
-
+        /**
+         * Print to screen footer
+         */
         void
         print_conv_footer();
-
+        /**
+         * Calculate the vertical displacement of the right, top tip of the membrane
+         * and print to screen.
+         */
         void
-        print_vertical_tip_displacement();
-
+        print_vertical_tip_displacement(unsigned int refinement_cycle);
 
     };
 
@@ -677,7 +675,7 @@ namespace Cooks_Membrane {
 
 // @sect4{Public interface}
 
-// We initialise the Solid class using data extracted from the parameter file.
+
     template<int dim, typename NumberType>
     Solid<dim, NumberType>::Solid(const Parameters::AllParameters &parameters)
             :
@@ -692,7 +690,7 @@ namespace Cooks_Membrane {
             degree(parameters.poly_degree),
             // The Finite Element System is composed of dim continuous displacement
             // DOFs.
-            fe(FE_Q<dim>(parameters.poly_degree), dim), // displacement
+            fe(FE_Q<dim>(parameters.poly_degree), dim),  /**< Displacement*/
             dof_handler_ref(triangulation),
             dofs_per_cell(fe.dofs_per_cell),
             u_fe(first_u_component),
@@ -703,46 +701,52 @@ namespace Cooks_Membrane {
             n_q_points_f(qf_face.size()) {}
 
 
-    // The class destructor simply clears the data held by the DOFHandler
     template<int dim, typename NumberType>
-    Solid<dim, NumberType>::~Solid() {
+    Solid<dim, NumberType>::~Solid()
+    /** Class destructor
+    * Clears data held by the <code>DOFHandler/code>
+    */
+    {
         dof_handler_ref.clear();
     }
 
 
-//
-// We start the function with preprocessing, and then output the initial grid
-// before starting the simulation proper with the first time.
-//
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::run() {
+    void Solid<dim, NumberType>::run()
+    /**
+    * Start the simulation with pre-processing, output an intial grid and then start
+    * the simulation proper.
+    */
+    {
         make_grid();
         system_setup();
-        output_results();
         time.increment();
 
-        // We then declare the incremental solution update $\varDelta
-        // \mathbf{\Xi}:= \{\varDelta \mathbf{u}\}$ and start the loop over the
-        // time domain.
-        //
-        // At the beginning, we reset the solution update for this time step...
-        BlockVector<double> solution_delta(dofs_per_block);
-        while (time.current() <= time.end()) {
-            solution_delta = 0.0;
+        for (unsigned int refinement_cycle = 0; refinement_cycle < 3;
+             ++refinement_cycle)
+        {
+            std::cout << "Refinement cycle " << refinement_cycle << std::endl;
 
-            // ...solve the current time step and update total solution vector
-            // $\mathbf{\Xi}_{\textrm{n}} = \mathbf{\Xi}_{\textrm{n-1}} +
-            // \varDelta \mathbf{\Xi}$...
-//            solve_nonlinear_timestep(solution_delta);
-            solve_nonlinear_timestep_kinsol(solution_delta);
-            solution_n += solution_delta;
+            if (refinement_cycle > 0)
+                refine_mesh();
 
-            // ...and plot the results before moving on happily to the next time
-            // step:
-            output_results();
-            time.increment();
+            BlockVector<double> solution_delta(dofs_per_block);
+            while (time.current() <= time.end()) {
+
+                solution_delta = 0.0;
+
+                    solve_nonlinear_timestep(solution_delta);
+
+                solution_n += solution_delta;
+
+
+                output_results(refinement_cycle);
+                time.increment();
+            }
+            print_vertical_tip_displacement(refinement_cycle);
+            timer.reset();
+            time.reset();
         }
-        print_vertical_tip_displacement();
 
     }
 
@@ -753,7 +757,14 @@ namespace Cooks_Membrane {
 // @sect4{Solid::grid_y_transfrom}
 
     template<int dim>
-    Point<dim> grid_y_transform(const Point<dim> &pt_in) {
+    Point<dim> grid_y_transform(const Point<dim> &pt_in)
+    /** Transform geometry
+     *
+     * @tparam dim FE system dimension
+     * @param pt_in Point to be transformed
+     * @return Transformed point
+     */
+    {
         const double &x = pt_in[0];
         const double &y = pt_in[1];
 
@@ -771,7 +782,13 @@ namespace Cooks_Membrane {
 // @sect4{Solid::make_grid}
 
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::make_grid() {
+    void Solid<dim, NumberType>::make_grid()
+    /** Create triangulation object
+     *
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     */
+    {
         std::cout << "Polynomial degree: Q" << parameters.poly_degree << std::endl;
         std::vector<unsigned int> repetitions(dim, parameters.elements_per_edge);
         if (dim == 3)
@@ -793,11 +810,11 @@ namespace Cooks_Membrane {
                  face < GeometryInfo<dim>::faces_per_cell; ++face)
                 if (cell->face(face)->at_boundary() == true) {
                     if (std::abs(cell->face(face)->center()[0] - 0.0) < tol_boundary)
-                        cell->face(face)->set_boundary_id(1); // -X faces
+                        cell->face(face)->set_boundary_id(1); /**< -X faces*/
                     else if (std::abs(cell->face(face)->center()[0] - 48.0) < tol_boundary)
-                        cell->face(face)->set_boundary_id(11); // +X faces
+                        cell->face(face)->set_boundary_id(11); /**< +X faces*/
                     else if (dim == 3 && std::abs(std::abs(cell->face(face)->center()[2]) - 0.5) < tol_boundary)
-                        cell->face(face)->set_boundary_id(2); // +Z and -Z faces
+                        cell->face(face)->set_boundary_id(2); /**< +Z and -Z faces*/
                 }
 
         GridTools::transform(&grid_y_transform<dim>, triangulation);
@@ -813,26 +830,70 @@ namespace Cooks_Membrane {
 
 // @sect4{Solid::system_setup}
 
-// Next we describe how the FE system is setup.  We first determine the number
-// of components per block. Since the displacement is a vector component, the
-// first dim components belong to it.
-    template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::system_setup() {
-        timer.enter_subsection("Setup system");
 
+    template<int dim, typename NumberType>
+    void Solid<dim, NumberType>::system_setup()
+    /** Set up the FE system
+     *
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     */
+     {
+        timer.enter_subsection("Setup system");
         std::vector<unsigned int> block_component(n_components, u_dof); // Displacement
 
-        // The DOF handler is then initialised and we renumber the grid in an
-        // efficient manner. We also record the number of DOFs per block.
-        dof_handler_ref.distribute_dofs(fe);
-        DoFRenumbering::Cuthill_McKee(dof_handler_ref);
-        DoFRenumbering::component_wise(dof_handler_ref, block_component);
-        dofs_per_block = DoFTools::count_dofs_per_fe_block(dof_handler_ref, block_component);
+            // Initialise DOF handler
+            dof_handler_ref.distribute_dofs(fe);
+            // Renumber the grid
+            solution_n.reinit(dofs_per_block);
+            solution_n.collect_sizes();
+            DoFRenumbering::Cuthill_McKee(dof_handler_ref);
+            DoFRenumbering::component_wise(dof_handler_ref, block_component);
+            dofs_per_block = DoFTools::count_dofs_per_fe_block(dof_handler_ref, block_component);
+
+            // Impose Dirichlet boundary conditions
+            constraints.clear();
+            DoFTools::make_hanging_node_constraints(dof_handler_ref,
+                                                    constraints);
+
+            {
+                const int boundary_id = 1; /**< -X faces*/
+                VectorTools::interpolate_boundary_values(dof_handler_ref,
+                                                         boundary_id,
+                                                         Functions::ZeroFunction<dim>(n_components),
+                                                         constraints,
+                                                         fe.component_mask(u_fe));
+            }
+
+            if (dim == 3) {
+                const int boundary_id = 2; /**< -Z and +Z faces*/
+                const FEValuesExtractors::Scalar z_displacement(2);
+                VectorTools::interpolate_boundary_values(dof_handler_ref,
+                                                         boundary_id,
+                                                         Functions::ZeroFunction<dim>(n_components),
+                                                         constraints,
+                                                         fe.component_mask(z_displacement));
+            }
+            else {
+                if (constraints.has_inhomogeneities()) {
+                    AffineConstraints<double> homogeneous_constraints(constraints);
+                    for (unsigned int dof = 0; dof != dof_handler_ref.n_dofs(); ++dof)
+                        if (homogeneous_constraints.is_inhomogeneously_constrained(dof))
+                            homogeneous_constraints.set_inhomogeneity(dof, 0.0);
+                    constraints.clear();
+                    constraints.copy_from(homogeneous_constraints);
+
+                }
+            }
+            constraints.close();
+
+
 
         std::cout << "Triangulation:"
                   << "\n\t Number of active cells: " << triangulation.n_active_cells()
                   << "\n\t Number of degrees of freedom: " << dof_handler_ref.n_dofs()
                   << std::endl;
+
 
         // Set up the sparsity pattern and tangent matrix
         tangent_matrix.clear();
@@ -845,8 +906,6 @@ namespace Cooks_Membrane {
             csp.block(u_dof, u_dof).reinit(n_dofs_u, n_dofs_u);
             csp.collect_sizes();
 
-            // Naturally, for a one-field vector-valued problem, all of the
-            // components of the system are coupled.
             Table<2, DoFTools::Coupling> coupling(n_components, n_components);
             for (unsigned int ii = 0; ii < n_components; ++ii)
                 for (unsigned int jj = 0; jj < n_components; ++jj)
@@ -859,60 +918,34 @@ namespace Cooks_Membrane {
             sparsity_pattern.copy_from(csp);
         }
 
+        std::ofstream out_dsp("sparsity_pattern1.svg");
+        sparsity_pattern.print_svg(out_dsp);
+
         tangent_matrix.reinit(sparsity_pattern);
 
-        // We then set up storage vectors
+         // System RHs storage vector
         system_rhs.reinit(dofs_per_block);
         system_rhs.collect_sizes();
-
+         // Current solution storage vector
         solution_n.reinit(dofs_per_block);
         solution_n.collect_sizes();
-
-        // ...and finally set up the quadrature
-        // point history:
-        setup_qph();
 
         timer.leave_subsection();
     }
 
 
-// @sect4{Solid::setup_qph}
-// The method used to store quadrature information is already described in
-// step-18 and step-44. Here we implement a similar setup for a SMP machine.
-//
-// Firstly the actual QPH data objects are created. This must be done only
-// once the grid is refined to its finest level.
-    template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::setup_qph() {
-        std::cout << "    Setting up quadrature point data..." << std::endl;
-
-        quadrature_point_history.initialize(triangulation.begin_active(),
-                                            triangulation.end(),
-                                            n_q_points);
-
-        // Next we setup the initial quadrature point data. Note that when
-        // the quadrature point data is retrieved, it is returned as a vector
-        // of smart pointers.
-        for (typename Triangulation<dim>::active_cell_iterator cell =
-                triangulation.begin_active(); cell != triangulation.end(); ++cell) {
-            const std::vector<std::shared_ptr<PointHistory<dim, NumberType> > > lqph =
-                    quadrature_point_history.get_data(cell);
-            Assert(lqph.size() == n_q_points, ExcInternalError());
-
-            for (unsigned int q_point = 0; q_point < n_q_points; ++q_point)
-                lqph[q_point]->setup_lqp(parameters);
-        }
-    }
-
-
 // @sect4{Solid::solve_nonlinear_timestep}
 
-// The next function is the driver method for the Newton-Raphson scheme. At
-// its top we create a new vector to store the current Newton update step,
-// reset the error storage objects and print solver header.
     template<int dim, typename NumberType>
     void
-    Solid<dim, NumberType>::solve_nonlinear_timestep(BlockVector<double> &solution_delta) {
+    Solid<dim, NumberType>::solve_nonlinear_timestep(BlockVector<double> &solution_delta)
+    /** Solver nonlinear timestep using the Newton-Raphson scheme
+     * As per Problem 1
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     * @param solution_delta Solution increment $\nabla \boldsymbol{u}$
+     */
+     {
         std::cout << std::endl << "Timestep " << time.get_timestep() << " @ "
                   << time.current() << "s" << std::endl;
 
@@ -927,38 +960,27 @@ namespace Cooks_Membrane {
 
         print_conv_header();
 
-        // We now perform a number of Newton iterations to iteratively solve the
-        // nonlinear problem.  Since the problem is fully nonlinear and we are
-        // using a full Newton method, the data stored in the tangent matrix and
-        // right-hand side vector is not reusable and must be cleared at each
-        // Newton step.  We then initially build the right-hand side vector to
-        // check for convergence (and store this value in the first iteration).
-        // The unconstrained DOFs of the rhs vector hold the out-of-balance
-        // forces. The building is done before assembling the system matrix as the
-        // latter is an expensive operation and we can potentially avoid an extra
-        // assembly process by not assembling the tangent matrix when convergence
-        // is attained.
-        unsigned int newton_iteration = 0;
+
+         // Perform a number of Newton iterations to iteratively solve
+         unsigned int newton_iteration = 0;
         for (; newton_iteration < parameters.max_iterations_NR;
                ++newton_iteration) {
             std::cout << " " << std::setw(2) << newton_iteration << " " << std::flush;
 
-            // If we have decided that we want to continue with the iteration, we
-            // assemble the tangent, make and impose the Dirichlet constraints,
-            // and do the solve of the linearized system:
-            make_constraints(newton_iteration);
-            assemble_system(solution_delta, /*rhs_only*/ false);
+            // Distribute the current solution
+            constraints.distribute(solution_n);
 
+            // Assemble the tangent matrix and residual
+            assemble_system(solution_delta, /*rhs_only*/ false);
             get_error_residual(error_residual);
 
             if (newton_iteration == 0)
                 error_residual_0 = error_residual;
 
-            // We can now determine the normalised residual error and check for
-            // solution convergence:
+            // Determine normalised residual error
             error_residual_norm = error_residual;
             error_residual_norm.normalise(error_residual_0);
-
+            // Check for convergence
             if (newton_iteration > 0 && error_update_norm.u <= parameters.tol_u
                 && error_residual_norm.u <= parameters.tol_f) {
                 std::cout << " CONVERGED! " << std::endl;
@@ -969,18 +991,15 @@ namespace Cooks_Membrane {
 
             const std::pair<unsigned int, double>
                     lin_solver_output = solve_linear_system(newton_update);
-
+            // Determine the normalised Newton update error
             get_error_update(newton_update, error_update);
             if (newton_iteration == 0)
                 error_update_0 = error_update;
 
-            // We can now determine the normalised Newton update error, and
-            // perform the actual update of the solution increment for the current
-            // time step, update all quadrature point information pertaining to
-            // this new displacement and stress state and continue iterating:
+
             error_update_norm = error_update;
             error_update_norm.normalise(error_update_0);
-
+            // Increment the solution
             solution_delta += newton_update;
 
             std::cout << " | " << std::fixed << std::setprecision(3) << std::setw(7)
@@ -991,14 +1010,7 @@ namespace Cooks_Membrane {
                       << "  " << std::endl;
         }
 
-        // At the end, if it turns out that we have in fact done more iterations
-        // than the parameter file allowed, we raise an exception that can be
-        // caught in the main() function. The call <code>AssertThrow(condition,
-        // exc_object)</code> is in essence equivalent to <code>if (!cond) throw
-        // exc_object;</code> but the former form fills certain fields in the
-        // exception object that identify the location (filename and line number)
-        // where the exception was raised to make it simpler to identify where the
-        // problem happened.
+
         AssertThrow(newton_iteration <= parameters.max_iterations_NR,
                     ExcMessage("No convergence in nonlinear solver!"));
     }
@@ -1006,11 +1018,12 @@ namespace Cooks_Membrane {
 
 // @sect4{Solid::print_conv_header, Solid::print_conv_footer and Solid::print_vertical_tip_displacement}
 
-// This program prints out data in a nice table that is updated
-// on a per-iteration basis. The next two functions set up the table
-// header and footer:
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::print_conv_header() {
+    void Solid<dim, NumberType>::print_conv_header()
+        /** Print table header
+       *
+       */
+       {
         static const unsigned int l_width = 87;
 
         for (unsigned int i = 0; i < l_width; ++i)
@@ -1029,7 +1042,13 @@ namespace Cooks_Membrane {
 
 
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::print_conv_footer() {
+    void Solid<dim, NumberType>::print_conv_footer()
+    /** Print table footer
+     *
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     */
+     {
         static const unsigned int l_width = 87;
 
         for (unsigned int i = 0; i < l_width; ++i)
@@ -1044,7 +1063,13 @@ namespace Cooks_Membrane {
     }
 
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::print_vertical_tip_displacement() {
+    void Solid<dim, NumberType>::print_vertical_tip_displacement(unsigned int refinement_cycle)
+    /** Compute and print the vertical tip displacement
+     *
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     */
+    {
         static const unsigned int l_width = 87;
 
         for (unsigned int i = 0; i < l_width; ++i)
@@ -1079,17 +1104,13 @@ namespace Cooks_Membrane {
         }
         AssertThrow(vertical_tip_displacement > 0.0, ExcMessage("Found no cell with point inside!"))
         std::cout << "Vertical tip displacement: " << vertical_tip_displacement
-                  << "\t Check: " << vertical_tip_displacement_check << std::endl;
+                  << "\t Check: " << vertical_tip_displacement_check <<  "\t R-cycle: " << refinement_cycle << std::endl;
     }
 
 
 
 // @sect4{Solid::get_error_residual}
 
-// Determine the true residual error for the problem.  That is, determine the
-// error in the residual for the unconstrained degrees of freedom.  Note that to
-// do so, we need to ignore constrained DOFs by setting the residual in these
-// vector components to zero.
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::get_error_residual(Errors &error_residual) {
         BlockVector<double> error_res(dofs_per_block);
@@ -1122,12 +1143,14 @@ namespace Cooks_Membrane {
 
 // @sect4{Solid::get_total_solution}
 
-// This function provides the total solution, which is valid at any Newton step.
-// This is required as, to reduce computational error, the total solution is
-// only updated at the end of the timestep.
+
     template<int dim, typename NumberType>
     BlockVector<double>
-    Solid<dim, NumberType>::get_total_solution(const BlockVector<double> &solution_delta) const {
+    Solid<dim, NumberType>::get_total_solution(const BlockVector<double> &solution_delta) const
+    /** Get the total solution vector
+     * @param solution_delta Solution increment $\nabla \boldsymbol{u}$
+     */
+     {
         BlockVector<double> solution_total(solution_n);
         solution_total += solution_delta;
         return solution_total;
@@ -1140,13 +1163,13 @@ namespace Cooks_Membrane {
     struct Assembler_Base {
         virtual ~Assembler_Base() {}
 
-        // Here we deal with the tangent matrix assembly structures. The
-        // PerTaskData object stores local contributions.
+        /**
+         * Stores local contributions to the system matrix and RHS
+         */
         struct Local_ASM {
             const Solid<dim, NumberType> *solid;
-            FullMatrix<double> cell_matrix;
-//            Vector<double> cell_strain;
-            Vector<double> cell_rhs;
+            FullMatrix<double> cell_matrix; /**< Local stiffness matrix*/
+            Vector<double> cell_rhs; /**< Local RHS vector*/
             std::vector<types::global_dof_index> local_dof_indices;
             bool rhs_only;
 
@@ -1155,22 +1178,18 @@ namespace Cooks_Membrane {
                     solid(solid),
                     cell_matrix(solid->dofs_per_cell, solid->dofs_per_cell),
                     cell_rhs(solid->dofs_per_cell),
-//                    cell_strain(solid->dofs_per_cell),
                     local_dof_indices(solid->dofs_per_cell),
                     rhs_only(rhs_only_in) {}
 
             void reset() {
                 cell_matrix = 0.0;
-//                cell_strain = 0.0;
                 cell_rhs = 0.0;
-//                rhs_only = false;
             }
         };
 
-        // On the other hand, the ScratchData object stores the larger objects such as
-        // the shape-function values array (<code>Nx</code>) and a shape function
-        // gradient and symmetric gradient vector which we will use during the
-        // assembly.
+        /**
+         * Stores larger objects for assembly, such as the shape-function array (<code>Nx</code>), gradient vectors, etc.
+         */
         struct ScratchData_ASM {
             const BlockVector<double> &solution_total;
             std::vector<Tensor<2, dim, NumberType> > solution_grads_u_total;
@@ -1178,11 +1197,14 @@ namespace Cooks_Membrane {
             FEValues<dim> fe_values_ref;
             FEFaceValues<dim> fe_face_values_ref;
 
-            std::vector<std::vector<Tensor<2, dim, NumberType> > > grad_Nx;
-            std::vector<std::vector<SymmetricTensor<2, dim, NumberType> > >
-                    symm_grad_Nx;
+            std::vector<std::vector<Tensor<2, dim, NumberType> > > grad_Nx; /**< Shape function gradient*/
+            std::vector<std::vector<SymmetricTensor<2, dim, NumberType> > > symm_grad_Nx; /**< Symmetric shape function gradient*/
 
             bool rhs_only;
+
+
+            Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material_direct;
+
 
             ScratchData_ASM(const FiniteElement<dim> &fe_cell,
                             const QGauss<dim> &qf_cell,
@@ -1190,7 +1212,8 @@ namespace Cooks_Membrane {
                             const QGauss<dim - 1> &qf_face,
                             const UpdateFlags uf_face,
                             const BlockVector<double> &solution_total,
-                            const bool rhs_only_in)
+                            const bool rhs_only_in,
+                            const Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material_direct_in)
                     :
                     solution_total(solution_total),
                     solution_grads_u_total(qf_cell.size()),
@@ -1201,7 +1224,9 @@ namespace Cooks_Membrane {
                     symm_grad_Nx(qf_cell.size(),
                                  std::vector<SymmetricTensor<2, dim, NumberType> >
                                          (fe_cell.dofs_per_cell)),
-                    rhs_only(rhs_only_in) {}
+                    rhs_only(rhs_only_in),
+                    material_direct(material_direct_in)
+            {}
 
             ScratchData_ASM(const ScratchData_ASM &rhs)
                     :
@@ -1214,7 +1239,10 @@ namespace Cooks_Membrane {
                                        rhs.fe_face_values_ref.get_quadrature(),
                                        rhs.fe_face_values_ref.get_update_flags()),
                     grad_Nx(rhs.grad_Nx),
-                    symm_grad_Nx(rhs.symm_grad_Nx) {}
+                    symm_grad_Nx(rhs.symm_grad_Nx),
+                    rhs_only(rhs.rhs_only),
+                    material_direct(rhs.material_direct)
+            {}
 
             void reset() {
                 const unsigned int n_q_points = fe_values_ref.get_quadrature().size();
@@ -1235,30 +1263,36 @@ namespace Cooks_Membrane {
 
         };
 
-        // Of course, we still have to define how we assemble the tangent matrix
-        // contribution for a single cell.
+
         void
         assemble_system_one_cell(const typename DoFHandler<dim>::active_cell_iterator &cell,
                                  ScratchData_ASM &scratch,
-                                 Local_ASM &data) {
-            // Due to the C++ specialization rules, we need one more
-            // level of indirection in order to define the assembly
-            // routine for all different number. The next function call
-            // is specialized for each NumberType, but to prevent having
-            // to specialize the whole class along with it we have inlined
-            // the definition of the other functions that are common to
-            // all implementations.
+                                 Local_ASM &data)
+        /**
+        * Assemble the tangent matrix contribution for a single cell
+        * @param cell
+        * @param scratch Shape functions, shape function gradients, etc.
+        * @param data Cell data
+        */
+        {
+            // Assemble local stiffness matrix and residual
             assemble_system_tangent_residual_one_cell(cell, scratch, data);
+            // Assemble Neumann contribution
             assemble_neumann_contribution_one_cell(cell, scratch, data);
         }
 
         // This function adds the local contribution to the system matrix.
         void
-        copy_local_to_global_ASM(const Local_ASM &data) {
+        copy_local_to_global_ASM(const Local_ASM &data)
+        /**
+         * Add the local contributions to the system matrix
+         */
+         {
             const AffineConstraints<double> &constraints = data.solid->constraints;
             BlockSparseMatrix<double> &tangent_matrix = const_cast<Solid<dim, NumberType> *>(data.solid)->tangent_matrix;
             BlockVector<double> &system_rhs = const_cast<Solid<dim, NumberType> *>(data.solid)->system_rhs;
 
+             // Assemble global tangent matrix and residual
             if (data.rhs_only == false) {
                 constraints.distribute_local_to_global(
                         data.cell_matrix, data.cell_rhs,
@@ -1266,14 +1300,13 @@ namespace Cooks_Membrane {
                         tangent_matrix, system_rhs);
 
 
-            } else {
+            }
+            // Assemble residual only
+            else {
                 constraints.distribute_local_to_global(
                         data.cell_rhs,
                         data.local_dof_indices,
                         system_rhs);
-//                cout<<"doing RHS only assembly"<<endl;
-
-
             }
 
         }
@@ -1291,9 +1324,14 @@ namespace Cooks_Membrane {
 
         void
         assemble_neumann_contribution_one_cell(const typename DoFHandler<dim>::active_cell_iterator &cell,
-                                               ScratchData_ASM &scratch,
-                                               Local_ASM &data) {
-            // Aliases for data referenced from the Solid class
+                                               ScratchData_ASM &scratch, Local_ASM &data)
+            /**
+             * Assemble Neumann contribution for the local residual
+             * @param cell
+             * @param scratch Shape functions, shape function gradients, etc.
+             * @param data Cell data
+             */
+                                               {
             const unsigned int &n_q_points_f = data.solid->n_q_points_f;
             const unsigned int &dofs_per_cell = data.solid->dofs_per_cell;
             const Parameters::AllParameters &parameters = data.solid->parameters;
@@ -1301,31 +1339,20 @@ namespace Cooks_Membrane {
             const FESystem<dim> &fe = data.solid->fe;
             const unsigned int &u_dof = data.solid->u_dof;
 
-            // Next we assemble the Neumann contribution. We first check to see it the
-            // cell face exists on a boundary on which a traction is applied and add
-            // the contribution if this is the case.
             for (unsigned int face = 0; face < GeometryInfo<dim>::faces_per_cell;
                  ++face)
+                // Check if on the Neumann boundary
                 if (cell->face(face)->at_boundary() == true
                     && cell->face(face)->boundary_id() == 11) {
                     scratch.fe_face_values_ref.reinit(cell, face);
 
                     for (unsigned int f_q_point = 0; f_q_point < n_q_points_f;
                          ++f_q_point) {
-                        // We specify the traction in reference configuration.
-                        // For this problem, a defined total vertical force is applied
-                        // in the reference configuration.
-                        // The direction of the applied traction is assumed not to
-                        // evolve with the deformation of the domain.
-
-                        // Note that the contributions to the right hand side vector we
-                        // compute here only exist in the displacement components of the
-                        // vector.
-
 
                         const double time_ramp = (time.current() / time.end());
-                        const double magnitude = (0.1 / (16.0 * parameters.scale * 1.0 * parameters.scale)) * time_ramp;
+                        const double magnitude = (parameters.traction / (16.0 * parameters.scale * 1.0 * parameters.scale)) * time_ramp; /**< Traction*/
                         Tensor<1, dim> dir;
+                        // Specify traction in reference configuration
                         dir[1] = 1.0;
                         const Tensor<1, dim> traction = magnitude * dir;
 
@@ -1364,8 +1391,14 @@ namespace Cooks_Membrane {
         virtual void
         assemble_system_tangent_residual_one_cell(const typename DoFHandler<dim>::active_cell_iterator &cell,
                                                   ScratchData_ASM &scratch,
-                                                  Local_ASM &data) {
-            // Aliases for data referenced from the Solid class
+                                                  Local_ASM &data)
+        /**
+         * Assemble the local tangent matrix and residual
+         * @param cell
+         * @param scratch
+         * @param data
+         */
+         {
             const unsigned int &n_q_points = data.solid->n_q_points;
             const unsigned int &dofs_per_cell = data.solid->dofs_per_cell;
             const FESystem<dim> &fe = data.solid->fe;
@@ -1378,24 +1411,17 @@ namespace Cooks_Membrane {
             scratch.fe_values_ref.reinit(cell);
             cell->get_dof_indices(data.local_dof_indices);
 
-            const std::vector<std::shared_ptr<const PointHistory<dim, NumberType> > > lqph =
-                    const_cast<const Solid<dim, NumberType> *>(data.solid)->quadrature_point_history.get_data(cell);
-            Assert(lqph.size() == n_q_points, ExcInternalError());
-
-            // We first need to find the solution gradients at quadrature points
-            // inside the current cell and then we update each local QP using the
-            // displacement gradient:
+             // Find the solution gradients in the current cell and update solution
             scratch.fe_values_ref[u_fe].get_function_gradients(scratch.solution_total,
                                                                scratch.solution_grads_u_total);
 
-            // Now we build the local cell stiffness matrix. Since the global and
-            // local system matrices are symmetric, we can exploit this property by
-            // building only the lower half of the local matrix and copying the values
-            // to the upper half.
-            //
-            // In doing so, we first extract some configuration dependent variables
-            // from our QPH history objects for the current quadrature point.
-            for (unsigned int q_point = 0; q_point < n_q_points; ++q_point) {
+
+            for (unsigned int q_point = 0; q_point < n_q_points; ++q_point)
+                /**
+                 * Build the local stiffness matrix while making use of its symmetry by calculating only the
+                 * entries in the lower half. These are copied into the top half.
+                 */
+                 {
                 const Tensor<2, dim, NumberType> &grad_u = scratch.solution_grads_u_total[q_point];
                 const Tensor<2, dim, NumberType> F = Physics::Elasticity::Kinematics::F(grad_u);
                 const NumberType det_F = determinant(F);
@@ -1406,18 +1432,15 @@ namespace Cooks_Membrane {
                     const unsigned int k_group = fe.system_to_base_index(k).first.first;
 
                     if (k_group == u_dof) {
-                        scratch.grad_Nx[q_point][k] = scratch.fe_values_ref[u_fe].gradient(k, q_point) * F_inv;
-                        scratch.symm_grad_Nx[q_point][k] = symmetrize(scratch.grad_Nx[q_point][k]);
+                        scratch.grad_Nx[q_point][k] = scratch.fe_values_ref[u_fe].gradient(k, q_point) * F_inv; /**< Grad(u)*/
+                        scratch.symm_grad_Nx[q_point][k] = symmetrize(scratch.grad_Nx[q_point][k]); /**< Symm_Grad(u)*/
                     } else Assert(k_group <= u_dof, ExcInternalError());
                 }
 
-                const SymmetricTensor<2, dim, NumberType> tau = lqph[q_point]->get_tau(C, det_F, F);
-                const SymmetricTensor<4, dim, NumberType> Jc = lqph[q_point]->get_Jc(C, det_F, F);
+                const SymmetricTensor<2, dim, NumberType> tau = scratch.material_direct.get_tau(C, det_F, F); /**< Kirchhoff stress */
+                const SymmetricTensor<4, dim, NumberType> Jc = scratch.material_direct.get_Jc(C, det_F, F); /**< Tangent */
                 const Tensor<2, dim, NumberType> tau_ns(tau);
 
-
-                // Next we define some aliases to make the assembly process easier to
-                // follow
                 const std::vector<SymmetricTensor<2, dim> > &symm_grad_Nx = scratch.symm_grad_Nx[q_point];
                 const std::vector<Tensor<2, dim> > &grad_Nx = scratch.grad_Nx[q_point];
                 const double JxW = scratch.fe_values_ref.JxW(q_point);
@@ -1430,21 +1453,17 @@ namespace Cooks_Membrane {
                         data.cell_rhs(i) -= (symm_grad_Nx[i] * tau) * JxW;
                     else Assert(i_group <= u_dof, ExcInternalError());
 
-                    // matrix only calcs
                     if (data.rhs_only == false) {
                         for (unsigned int j = 0; j <= i; ++j) {
                             const unsigned int component_j = fe.system_to_component_index(j).first;
                             const unsigned int j_group = fe.system_to_base_index(j).first.first;
-                            // This is the $\mathsf{\mathbf{k}}_{\mathbf{u} \mathbf{u}}$
-                            // contribution. It comprises a material contribution, and a
-                            // geometrical stress contribution which is only added along
-                            // the local matrix diagonals:
+
                             if ((i_group == j_group) && (i_group == u_dof)) {
                                 data.cell_matrix(i, j) += symm_grad_Nx[i] * Jc
-                                                          * symm_grad_Nx[j] * JxW;// The material contribution:
-                                if (component_i == component_j) // geometrical stress contribution
+                                                          * symm_grad_Nx[j] * JxW; /**<The material contribution*/
+                                if (component_i == component_j)
                                     data.cell_matrix(i, j) += grad_Nx[i][component_i] * tau_ns
-                                                              * grad_Nx[j][component_j] * JxW;
+                                                              * grad_Nx[j][component_j] * JxW;  /**< The geometrical stress contribution*/
                             } else Assert((i_group <= u_dof) && (j_group <= u_dof),
                                           ExcInternalError());
                         }
@@ -1452,9 +1471,7 @@ namespace Cooks_Membrane {
                 }
             }
 
-
-            // Finally, we need to copy the lower half of the local matrix into the
-            // upper half:
+             // Copy the lower half of the local matrix into the upper half:
             if (data.rhs_only == false) {
                 for (unsigned int i = 0; i < dofs_per_cell; ++i)
                     for (unsigned int j = i + 1; j < dofs_per_cell; ++j) {
@@ -1465,13 +1482,16 @@ namespace Cooks_Membrane {
     };
 
 
-// Since we use TBB for assembly, we simply setup a copy of the
-// data structures required for the process and pass them, along
-// with the memory addresses of the assembly functions to the
-// WorkStream object for processing. Note that we must ensure that
-// the matrix is reset before any assembly operations can occur.
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::assemble_system(const BlockVector<double> &solution_delta, const bool rhs_only) {
+    void Solid<dim, NumberType>::assemble_system(const BlockVector<double> &solution_delta, const bool rhs_only)
+    /**
+     * Assemble system using WorkStream
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     * @param solution_delta Solution increment $\nabla \boldsymbol{u}$
+     * @param rhs_only
+     */
+     {
         timer.enter_subsection("Assemble linear system");
         if (rhs_only == false) {
             std::cout << " ASM_T " << std::flush;
@@ -1489,8 +1509,9 @@ namespace Cooks_Membrane {
 
         const BlockVector<double> solution_total(get_total_solution(solution_delta));
         typename Assembler_Base<dim, NumberType>::Local_ASM per_task_data(this, rhs_only);
+Material_Compressible_Mooney_Rivlin_One_Field<dim, NumberType> material_direct(parameters);
         typename Assembler_Base<dim, NumberType>::ScratchData_ASM scratch_data(fe, qf_cell, uf_cell, qf_face, uf_face,
-                                                                               solution_total, rhs_only);
+                                                                               solution_total, rhs_only,material_direct);
         Assembler<dim, NumberType> assembler;
 
         WorkStream::run(dof_handler_ref.begin_active(),
@@ -1506,53 +1527,32 @@ namespace Cooks_Membrane {
 
 
 // @sect4{Solid::make_constraints}
-// The constraints for this problem are simple to describe.
-// However, since we are dealing with an iterative Newton method,
-// it should be noted that any displacement constraints should only
-// be specified at the zeroth iteration and subsequently no
-// additional contributions are to be made since the constraints
-// are already exactly satisfied.
-
-
 
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::make_constraints(const int &it_nr) {
+    void Solid<dim, NumberType>::make_constraints(const int &it_nr)
+    /**
+     * Impose Dirichlet boundary conditions
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     * @param it_nr Newton iteration number
+     */
+     {
         std::cout << " CST " << std::flush;
 
-        // Since the constraints are different at different Newton iterations, we
-        // need to clear the constraints matrix and completely rebuild
-        // it. However, after the first iteration, the constraints remain the same
-        // and we can simply skip the rebuilding step if we do not clear it.
+
         if (it_nr > 1)
             return;
         const bool apply_dirichlet_bc = (it_nr == 0);
 
-        // The boundary conditions for the indentation problem are as follows: On
-        // the -x face (ID = 1), we set up a zero-displacement condition, -y and +y traction
-        // free boundary condition (don't need to take care); -z and +z faces (ID = 2) are
-        // not allowed to move along z axis so that it is a plane strain problem.
-        // Finally, as described earlier, +x face (ID = 11) has an the applied
-        // distributed shear force (converted by total force per unit area) which
-        // needs to be taken care as an inhomogeneous Neumann boundary condition.
-        //
-        // In the following, we will have to tell the function interpolation
-        // boundary values which components of the solution vector should be
-        // constrained (i.e., whether it's the x-, y-, z-displacements or
-        // combinations thereof). This is done using ComponentMask objects (see
-        // @ref GlossComponentMask) which we can get from the finite element if we
-        // provide it with an extractor object for the component we wish to
-        // select. To this end we first set up such extractor objects and later
-        // use it when generating the relevant component masks:
         if (apply_dirichlet_bc) {
-            constraints.clear();
-
 
             {
-                double time_end = time.end();
-                double delta_t = time.get_delta_t();
+                constraints.clear();
+                DoFTools::make_hanging_node_constraints(dof_handler_ref, constraints);
+
 
                 {
-                    const int boundary_id = 1;
+                    const int boundary_id = 1; /**< -X faces*/
                     VectorTools::interpolate_boundary_values(dof_handler_ref,
                                                              boundary_id,
                                                              Functions::ZeroFunction<dim>(n_components),
@@ -1561,7 +1561,7 @@ namespace Cooks_Membrane {
                 }
 
                 if (dim == 3) {
-                    const int boundary_id = 2;
+                    const int boundary_id = 2; /**< -Z and +Z faces*/
                     const FEValuesExtractors::Scalar z_displacement(2);
                     VectorTools::interpolate_boundary_values(dof_handler_ref,
                                                              boundary_id,
@@ -1572,10 +1572,8 @@ namespace Cooks_Membrane {
 
             }
 
-            // Zero Z-displacement through thickness direction
-            // This corresponds to a plane stress condition being imposed on the beam
-
-        } else {
+        }
+        else {
             if (constraints.has_inhomogeneities()) {
                 AffineConstraints<double> homogeneous_constraints(constraints);
                 for (unsigned int dof = 0; dof != dof_handler_ref.n_dofs(); ++dof)
@@ -1586,12 +1584,13 @@ namespace Cooks_Membrane {
             }
         }
 
+
         constraints.close();
+
     }
 
 // @sect4{Solid::solve_linear_system}
-// As the system is composed of a single block, defining a solution scheme
-// for the linear problem is straight-forward.
+
     template<int dim, typename NumberType>
     std::pair<unsigned int, double>
     Solid<dim, NumberType>::solve_linear_system(BlockVector<double> &newton_update) {
@@ -1601,11 +1600,14 @@ namespace Cooks_Membrane {
         unsigned int lin_it = 0;
         double lin_res = 0.0;
 
-        // We solve for the incremental displacement $d\mathbf{u}$.
-        {
+        {    // Solve for incremental displacement
             timer.enter_subsection("Linear solver");
             std::cout << " SLV " << std::flush;
-            if (parameters.type_lin == "CG") {
+            if (parameters.type_lin == "CG")
+            /**
+            * Solve using the Conjugate Gradient method
+            */
+            {
                 const int solver_its = static_cast<unsigned int>(
                         tangent_matrix.block(u_dof, u_dof).m()
                         * parameters.max_iterations_lin);
@@ -1634,10 +1636,12 @@ namespace Cooks_Membrane {
 
                 lin_it = solver_control.last_step();
                 lin_res = solver_control.last_value();
-            } else if (parameters.type_lin == "Direct") {
-                // Otherwise if the problem is small
-                // enough, a direct solver can be
-                // utilised.
+            }
+            else if (parameters.type_lin == "Direct")
+            /**
+            * Solve using the direct linear solver, UMFPACK
+            */
+            {
                 SparseDirectUMFPACK A_direct;
                 A_direct.initialize(tangent_matrix.block(u_dof, u_dof));
                 A_direct.vmult(newton_update.block(u_dof), system_rhs.block(u_dof));
@@ -1649,19 +1653,55 @@ namespace Cooks_Membrane {
             timer.leave_subsection();
         }
 
-        // Now that we have the displacement update, distribute the constraints
-        // back to the Newton update:
+        // Distribute constraints to Newton update
         constraints.distribute(newton_update);
 
         return std::make_pair(lin_it, lin_res);
     }
 
+// @sect4{Solid::refine_mesh}
+    template <int dim, typename NumberType>
+    void Solid<dim, NumberType>::refine_mesh()
+    /**
+     * Estimate the solution error on each cell and refine the mesh
+     * accordingly.
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     */
+     {
+        Vector<float> estimated_error_per_cell(triangulation.n_active_cells());
+
+        KellyErrorEstimator<dim>::estimate(dof_handler_ref,
+                                           QGauss<dim-1>(fe.degree+1),
+                                           std::map<types::boundary_id , const Function<dim>*>(),
+                                           solution_n,
+                                           estimated_error_per_cell,
+                                           fe.component_mask(u_fe));
+
+        GridRefinement::refine_and_coarsen_fixed_number(triangulation,
+                                                        estimated_error_per_cell,
+                                                        0.3,
+                                                        0.03);
+
+        triangulation.prepare_coarsening_and_refinement();
+
+        SolutionTransfer<dim, BlockVector<double>> solution_transfer(dof_handler_ref);
+        solution_transfer.prepare_for_coarsening_and_refinement(solution_n);
+        triangulation.execute_coarsening_and_refinement();
+        system_setup();
+    }
+
+
 // @sect4{Solid::output_results}
-// Here we present how the results are written to file to be viewed
-// using ParaView or Visit. The method is similar to that shown in the
-// tutorials so will not be discussed in detail.
+
     template<int dim, typename NumberType>
-    void Solid<dim, NumberType>::output_results() const {
+    void Solid<dim, NumberType>::output_results(unsigned int refinement_cycle) const
+    /**
+     * Post-process solution and write to file.
+     * @tparam dim FE system dimension
+     * @tparam NumberType
+     */
+     {
         DataOut<dim> data_out;
         std::vector<DataComponentInterpretation::DataComponentInterpretation>
                 data_component_interpretation(dim, DataComponentInterpretation::component_is_part_of_vector);
@@ -1674,21 +1714,23 @@ namespace Cooks_Membrane {
                                  DataOut<dim>::type_dof_data,
                                  data_component_interpretation);
 
-        GradientPostprocessor<dim> grad_post;
-        data_out.add_data_vector(solution_n, grad_post);
-        DeformationGradientPostprocessor<dim> F_post;
-        data_out.add_data_vector(solution_n, F_post);
-        CauchyStressPostprocessor<dim, NumberType> sig_post(parameters);
-        data_out.add_data_vector(solution_n, sig_post);
-        LagrangeStrainPostprocessor<dim, NumberType> E_post(parameters);
-        data_out.add_data_vector(solution_n, E_post);
+         GradientPostprocessor<dim> grad_post; /**< Solution gradient post-processor object*/
+         data_out.add_data_vector(solution_n, grad_post);
+         DeformationGradientPostprocessor<dim> F_post; /**< Deformation gradient post-processor object*/
+         data_out.add_data_vector(solution_n, F_post);
+         CauchyStressPostprocessor<dim, NumberType> sig_post(parameters); /**< Cauchy stress post-processor object*/
+         data_out.add_data_vector(solution_n, sig_post);
+         LagrangeStrainPostprocessor<dim, NumberType> E_post(parameters); /**< Green-Lagrange strain post-processor object*/
+         data_out.add_data_vector(solution_n, E_post);
 
 
         data_out.build_patches();
         std::ostringstream filename;
         string file;
 
-        file = "Q" + to_string(parameters.poly_degree) + "cooks-membrane_solution-" + to_string(time.get_timestep()) +
+
+        // Write to file
+        file = "Q" + to_string(parameters.poly_degree) + "R" + to_string(refinement_cycle) + "T" + to_string(parameters.traction)+ "cooks-membrane_soln-" + to_string(time.get_timestep()) +
                ".vtu";
 
         std::ofstream output(file.c_str());

@@ -12,6 +12,8 @@ subsection Finite element system
 end
 
 subsection Geometry
+    # Traction
+    set Traction = 5.3
     # Elements per edge
     set Elements per edge = 32
     # Grid scale

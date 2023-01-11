@@ -47,6 +47,9 @@ namespace Parameters
     {
         prm.enter_subsection("Geometry");
         {
+            prm.declare_entry("Traction", "0.1",
+                              Patterns::Double(0.0),
+                              "Traction");
             prm.declare_entry("Elements per edge", "32",
                               Patterns::Integer(0),
                               "Number of elements per long edge of the beam");
@@ -62,6 +65,7 @@ namespace Parameters
     {
         prm.enter_subsection("Geometry");
         {
+            traction = prm.get_double("Traction");
             elements_per_edge = prm.get_integer("Elements per edge");
             scale = prm.get_double("Grid scale");
         }

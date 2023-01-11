@@ -692,7 +692,6 @@ namespace Cooks_Membrane {
             n_q_points_f(qf_face.size()) {}
 
 
-    // The class destructor simply clears the data held by the DOFHandler
     template<int dim, typename NumberType>
     Solid<dim, NumberType>::~Solid()
     /** Class destructor
@@ -954,7 +953,7 @@ namespace Cooks_Membrane {
 
             // Impose Dirichlet boundary conditions
             make_constraints(newton_iteration);
-            // Assemble the tangent matrix only
+            // Assemble the tangent matrix and residual
             assemble_system(solution_delta, /*rhs_only*/ false);
 
             get_error_residual(error_residual);
@@ -1096,10 +1095,6 @@ namespace Cooks_Membrane {
 
 // @sect4{Solid::get_error_residual}
 
-// Determine the true residual error for the problem.  That is, determine the
-// error in the residual for the unconstrained degrees of freedom.  Note that to
-// do so, we need to ignore constrained DOFs by setting the residual in these
-// vector components to zero.
     template<int dim, typename NumberType>
     void Solid<dim, NumberType>::get_error_residual(Errors &error_residual) {
         BlockVector<double> error_res(dofs_per_block);
@@ -1132,9 +1127,6 @@ namespace Cooks_Membrane {
 
 // @sect4{Solid::get_total_solution}
 
-// This function provides the total solution, which is valid at any Newton step.
-// This is required as, to reduce computational error, the total solution is
-// only updated at the end of the timestep.
     template<int dim, typename NumberType>
     BlockVector<double>
     Solid<dim, NumberType>::get_total_solution(const BlockVector<double> &solution_delta) const
@@ -1260,7 +1252,7 @@ namespace Cooks_Membrane {
             // Assemble local stiffness matrix and residual
             assemble_system_tangent_residual_one_cell(cell, scratch, data);
             // Assemble Neumann contribution
-            assemble_neumann_contribution_one_cell(cell, scratch, data);
+                                     assemble_neumann_contribution_one_cell(cell, scratch, data);
         }
 
         void
@@ -1306,8 +1298,7 @@ namespace Cooks_Membrane {
 
         void
         assemble_neumann_contribution_one_cell(const typename DoFHandler<dim>::active_cell_iterator &cell,
-                                               ScratchData_ASM &scratch,
-                                               Local_ASM &data)
+                                               ScratchData_ASM &scratch, Local_ASM &data)
                                                /**
                                                 * Assemble Neumann contribution for the local residual
                                                 * @param cell
@@ -1334,7 +1325,7 @@ namespace Cooks_Membrane {
                          ++f_q_point) {
 
                         const double time_ramp = (time.current() / time.end());
-                        const double magnitude = (0.1 / (16.0 * parameters.scale * 1.0 * parameters.scale)) * time_ramp; /**< Traction*/
+                        const double magnitude = (parameters.traction/ (16.0 * parameters.scale * 1.0 * parameters.scale)) * time_ramp; /**< Traction*/
                         Tensor<1, dim> dir;
                         // Specify traction in reference configuration
                         dir[1] = 1.0;
@@ -1681,9 +1672,8 @@ namespace Cooks_Membrane {
         string file;
 
         // Write to file
-        file = "Q" + to_string(parameters.poly_degree) + "cooks-membrane_solution-" + to_string(time.get_timestep()) +
+        file = "Q" + to_string(parameters.poly_degree) + "T" + to_string(parameters.traction)+ "cooks-membrane_soln-" + to_string(time.get_timestep()) +
                ".vtu";
-
         std::ofstream output(file.c_str());
         data_out.write_vtu(output);
 

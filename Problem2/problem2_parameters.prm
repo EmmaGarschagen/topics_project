@@ -9,8 +9,6 @@ subsection Finite element system
   # Gauss quadrature order
   set Quadrature order  = 2
 
-  # Simulation geometry (1 = full geometry, 2 = gauge section)
-  set Simulation geometry = 2
 end
 
 subsection Geometry
@@ -52,6 +50,9 @@ end
 
 
 subsection Nonlinear solver
+  # Nonlinear solver (kinsol | newton)
+  set Nonlinear solver = kinsol
+
   # Number of Newton-Raphson iterations allowed
   set Max iterations Newton-Raphson = 15
 

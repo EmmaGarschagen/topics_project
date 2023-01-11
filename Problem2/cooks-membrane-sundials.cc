@@ -1,11 +1,12 @@
 /* ---------------------------------------------------------------------
- * Problem 1: Finite Deformation Elasticity
+ * Problem 2: Finite Deformation Elasticity
  * Emma Garschagen
  * November 2022
  *
  * This code is based on a modified Cook's Membrane problem developed for
- * the deal code gallery by Jean-Paul Pelteret, University of Erlangen-Nuremberg,
- * and Andrew McBride, University of Cape Town, 2015, 2017.
+ * the deal.ii code gallery by Jean-Paul Pelteret, University of Erlangen-Nuremberg,
+ * and Andrew McBride, University of Cape Town, 2015, 2017 and Step-77 from the deal.ii
+ * tutorials contributed by Wolfgang Bangerth, Colorado State University.
  * ---------------------------------------------------------------------
  */
 
@@ -18,7 +19,7 @@ bool almost_equals(const double &a,
     return fabs(a - b) < tol;
 }
 
-namespace Tensile_Test {
+namespace Cooks_Membrane {
     using namespace dealii;
     using namespace std;
 
@@ -30,13 +31,15 @@ namespace Tensile_Test {
 
 int main(int argc, char *argv[]) {
     using namespace dealii;
-    using namespace Tensile_Test;
+    using namespace Cooks_Membrane;
 
     const unsigned int dim = 3;
 
+
+
     try {
         deallog.depth_console(0);
-        Parameters::AllParameters parameters("problem21_parameters.prm");
+        Parameters::AllParameters parameters("problem2_parameters.prm");
 
 
         std::cout << "Assembly method: Residual and linearisation are computed manually." << std::endl;

@@ -38,6 +38,10 @@
             ++timestep;
         }
 
+        void reset(){
+            time_current = 0.0;
+        }
+
     private:
         unsigned int timestep;
         double time_current;

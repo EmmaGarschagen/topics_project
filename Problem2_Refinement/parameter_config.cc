@@ -36,6 +36,10 @@ void Geometry::declare_parameters(dealii::ParameterHandler &prm)
 {
     prm.enter_subsection("Geometry");
     {
+        prm.declare_entry("Traction", "0.1",
+                          Patterns::Double(0.0),
+                          "Traction");
+
         prm.declare_entry("Elements per edge", "32",
                           Patterns::Integer(0),
                           "Number of elements per long edge of the beam");
@@ -52,6 +56,7 @@ void Geometry::parse_parameters(dealii::ParameterHandler &prm)
 {
     prm.enter_subsection("Geometry");
     {
+        traction = prm.get_double("Traction");
         elements_per_edge = prm.get_integer("Elements per edge");
         scale = prm.get_double("Grid scale");
     }
@@ -61,13 +66,17 @@ void Geometry::parse_parameters(dealii::ParameterHandler &prm)
 void Materials::declare_parameters(ParameterHandler &prm) {
     prm.enter_subsection("Material properties");
     {
-        prm.declare_entry("Poisson's ratio", "0.3",
-                          Patterns::Double(-1.0, 0.5),
-                          "Poisson's ratio");
+        prm.declare_entry("Constant 0", "1e9",
+                          Patterns::Double(0.0),
+                          "Constant 0");
 
-        prm.declare_entry("Shear modulus", "0.450e6",
-                          Patterns::Double(),
-                          "Shear modulus");
+        prm.declare_entry("Constant 1", "92e3",
+                          Patterns::Double(0.0),
+                          "Constant 1");
+
+        prm.declare_entry("Constant 2", "237e3",
+                          Patterns::Double(0.0),
+                          "Constant 2");
     }
     prm.leave_subsection();
 }
@@ -75,8 +84,9 @@ void Materials::declare_parameters(ParameterHandler &prm) {
 void Materials::parse_parameters(ParameterHandler &prm) {
     prm.enter_subsection("Material properties");
     {
-        nu = prm.get_double("Poisson's ratio");
-        mu = prm.get_double("Shear modulus");
+        c0 = prm.get_double("Constant 0");
+        c1 = prm.get_double("Constant 1");
+        c2 = prm.get_double("Constant 2");
     }
     prm.leave_subsection();
 }

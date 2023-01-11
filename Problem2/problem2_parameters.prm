@@ -9,11 +9,11 @@ subsection Finite element system
   # Gauss quadrature order
   set Quadrature order  = 2
 
-  # Simulation geometry (1 = full geometry, 2 = gauge section)
-  set Simulation geometry = 2
 end
 
 subsection Geometry
+    # Traction
+    set Traction = 5.3
     # Elements per edge
     set Elements per edge = 32
     # Grid scale
@@ -39,15 +39,22 @@ end
 
 
 subsection Material properties
-  # Poisson's ratio
-  set Poisson's ratio = 0.3
+  # Constant 0
+  set Constant 0 = 1000.01e06
 
-  # Shear modulus
-  set Shear modulus   = 0.450e6
+  # Constant 1
+  set Constant 1  = 0.092e06
+
+  # Constant 2
+  set Constant 2 = 0.237e06
+
 end
 
 
 subsection Nonlinear solver
+  # Nonlinear solver (kinsol | newton)
+  set Nonlinear solver = kinsol
+
   # Number of Newton-Raphson iterations allowed
   set Max iterations Newton-Raphson = 15
 

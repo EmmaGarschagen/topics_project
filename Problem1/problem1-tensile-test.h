@@ -7,10 +7,11 @@
  *
  * This code is based on a modified Cook's Membrane problem developed for
  * the deal.ii code gallery by Jean-Paul Pelteret, University of Erlangen-Nuremberg,
- * and Andrew McBride, University of Cape Town, 2015, 2017. Benjamin Alheit has
- * also contributed his expertise to this programme.
+ * and Andrew McBride, University of Cape Town, 2015, 2017 and Step-44 from the deal.ii
+ * tutorials contributed by Wolfgang Bangerth, Colorado State University.
  * ---------------------------------------------------------------------
  */
+
 
 #include <deal.II/base/function.h>
 #include <deal.II/base/parameter_handler.h>

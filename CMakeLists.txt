@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.5)
 
 PROJECT(emma-topics-project)
 
-#file(GLOB PART1_SRCS Problem1/*.cc Problem1/*.h)
+file(GLOB PART1_SRCS Problem1/*.cc Problem1/*.h)
 file(GLOB PART2_SRCS Problem2/*.cc Problem2/*.h)
 file(GLOB PART2R_SRCS Problem2_Refinement/*.cc Problem2_Refinement/*.h)
 
@@ -15,9 +15,8 @@ FIND_PACKAGE(deal.II 9.4.1
 DEAL_II_INITIALIZE_CACHED_VARIABLES()
 
 
-#ADD_EXECUTABLE( part1 ${PART1_SRCS})
-#DEAL_II_SETUP_TARGET(part1)
-
+ADD_EXECUTABLE( part1 ${PART1_SRCS})
+DEAL_II_SETUP_TARGET(part1)
 ADD_EXECUTABLE( part2 ${PART2_SRCS} Problem2/cooks-membrane-sundials.h)
 DEAL_II_SETUP_TARGET(part2)
 ADD_EXECUTABLE( part2_refine ${PART2R_SRCS})

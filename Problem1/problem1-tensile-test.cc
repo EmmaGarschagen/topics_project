@@ -1,6 +1,14 @@
-//
-// Created by Dell on 2023/01/10.
-//
+/* ---------------------------------------------------------------------
+ * Problem 1: Finite Deformation Elasticity
+ * Emma Garschagen
+ * November 2022
+ *
+ * This code is based on a modified Cook's Membrane problem developed for
+ * the deal.ii code gallery by Jean-Paul Pelteret, University of Erlangen-Nuremberg,
+ * and Andrew McBride, University of Cape Town, 2015, 2017 and Step-44 from the deal.ii
+ * tutorials contributed by Wolfgang Bangerth, Colorado State University.
+ * ---------------------------------------------------------------------
+ */
 
 #include "problem1-tensile-test.h"
 

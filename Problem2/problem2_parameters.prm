@@ -13,9 +13,9 @@ end
 
 subsection Geometry
     # Traction
-    set Traction = 5.3
+    set Traction = 2.5
     # Elements per edge
-    set Elements per edge = 32
+    set Elements per edge = 16
     # Grid scale
     set Grid scale = 1e-3
 end
@@ -53,7 +53,7 @@ end
 
 subsection Nonlinear solver
   # Nonlinear solver (kinsol | newton)
-  set Nonlinear solver = kinsol
+  set Nonlinear solver = newton
 
   # Number of Newton-Raphson iterations allowed
   set Max iterations Newton-Raphson = 15
